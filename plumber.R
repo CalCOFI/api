@@ -49,25 +49,21 @@ function() {
 #* Get time series data
 #* @param variable The variable of interest. Must be one listed in `/variables`.
 #* @param aoi_wkt Area of Interest (AOI) spatially described as well known text (WKT). Defaults to NULL, i.e. no filter or entire dataset.
-#* @param date_beg Date to begin, e.g. "2000-01-01". Defaults to NULL, i.e. no filter or entire dataset.
-#* @param date_end Date to end, e.g. "2020-12-31". Defaults to NULL, i.e. no filter or entire dataset.
-#* @param date_step Date aggregation step, by: "year" (default), "day", "week", "month", "quarter", "decade". 
-#*   If NULL then all values are returned, i.e. no aggregation by `date_step` or `stats` are applicable.
-#* @param stats Statistics to show per `date_step`. Defaults to "mean, p05, p95". 
-#*   Acceptable comma-separated values include: "min", "median", "max", "sd" or "p#" 
-#*   where "sd" is the standard deviation and "p#" represents the percentile value 0 to 100 
-#*   within available range of values for given aggregated `date_step`.
 #* @param depth_m_min Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
 #* @param depth_m_max Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_beg Date to begin, e.g. "2000-01-01". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_end Date to end, e.g. "2020-12-31". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param time_step time step over which to summarize; one of: a sequential increment ("decade", "year", "year.quarter", "year.month", "year.week", "date") or a climatology ("quarter","month","week","julianday","hour"). default is "year". If NULL then all values are returned, i.e. no aggregation by `time_step` or `stats` are applicable.
+#* @param stats Statistics to show per `time_step`. Defaults to "mean, p05, p95". Acceptable comma-separated values include: "min", "median", "max", "sd" or "p#" where "sd" is the standard deviation and "p#" represents the percentile value 0 to 100 within available range of values for given aggregated `time_step`.
 #* @get /timeseries
 #* @serializer csv
 function(
   variable = "ctdcast_bottle.t_deg_c", 
   aoi_wkt = NULL, 
+  depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
-  date_step = "year",
-  stats = "avg, q10, q90",
-  depth_m_min = NULL, depth_m_max = NULL){
+  time_step = "year",
+  stats = "avg, q10, q90"){
   
   # DEBUG
   # variable = "ctdcast_bottle.t_deg_c"
@@ -79,7 +75,7 @@ function(
   # st_bbox(aoi_sf) %>% st_as_sfc() %>% st_as_text()
   # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
   # date_beg = NULL; date_end = NULL
-  # date_step = "year"
+  # time_step = "year"
   # stats = "mean, p10, p90"
   # depth_m_min = NULL; depth_m_max = NULL
   
@@ -105,10 +101,10 @@ function(
   # is_valid_date(date_beg)
   # is_valid_date(date_end)
   
-  stopifnot(date_step %in% c("decade","year","year.quarter","year.month","year.week","date","quarter","month","week","julianday","hour"))
+  stopifnot(time_step %in% c("decade","year","year.quarter","year.month","year.week","date","quarter","month","week","julianday","hour"))
   # TODO: Describe non- vs climatalogical vars: "quarter","month","week","julianday"
-  q_date_step <- switch(
-    date_step,
+  q_time_step <- switch(
+    time_step,
     decade       = "(DATE_PART('decade' , date) * 10) AS decade",
     # year         = "DATE_PART('year'   , date) AS year",
     year         = "DATE_PART('year'   , date)",
@@ -121,8 +117,8 @@ function(
     week         = "DATE_PART('week'   , date) AS week",
     julianday    = "DATE_PART('doy'    , date) AS julianday",
     hour         = "DATE_PART('hour'   , datetime) AS hour")
-  if (is.null(q_date_step))
-    q_date_step = "datetime"
+  if (is.null(q_time_step))
+    q_time_step = "datetime"
   
   q_from <- case_when(
     v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
@@ -150,18 +146,18 @@ function(
   # https://www.postgresql.org/docs/9.4/functions-aggregate.html
   
   q <- glue(
-    "SELECT {q_date_step} AS {date_step}, AVG({v$fld}) AS {v$fld}_avg, STDDEV({v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
+    "SELECT {q_time_step} AS {time_step}, AVG({v$fld}) AS {v$fld}_avg, STDDEV({v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
     FROM {q_from}
     WHERE {q_where_aoi} AND {q_where_date} AND {q_where_depth}
-    GROUP BY {q_date_step} 
-    ORDER BY {date_step}")
+    GROUP BY {q_time_step} 
+    ORDER BY {time_step}")
   message(q)
   d <- dbGetQuery(con, q)
 
   # TODO: add attributes like Cristina's original function  
   # attr(d_aoi_summ, "labels")    <- eval(parse(text = glue("var_lookup$`{var}`")))
-  # attr(d_aoi_summ, "date_step") <- date_step
-  # attr(d_aoi_summ, "date_msg")  <- glue("This dataset was summarized by {date_step}.")
+  # attr(d_aoi_summ, "time_step") <- time_step
+  # attr(d_aoi_summ, "date_msg")  <- glue("This dataset was summarized by {time_step}.")
   # attr(d_aoi_summ, "aoi") <- ifelse(
   #   empty_data_for_var,
   #   glue("No data were found for {var} in this area of interest. Summaries were conducted across all existing data points."),
