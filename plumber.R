@@ -174,7 +174,7 @@ function(
 
 # /cruises ----
 #* Get list of cruises with summary stats as CSV table for time (`date_beg`)
-#* @get /variables
+#* @get /cruises
 #* @serializer csv
 function() {
 
