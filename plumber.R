@@ -6,10 +6,14 @@ if (!require("librarian")){
   library(librarian)
 }
 librarian::shelf(
-  DBI, dbplyr, dplyr, glue, here, lubridate, RPostgres, sf, stringr, tidyr)
+  DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
+  plumber, raster, RPostgres, sf, stringr, tidyr)
+
+# paths ----
+db_pass_txt <- "~/.calcofi_db_pass.txt"
+dir_cache <- "/tmp"
 
 # database ----
-db_pass_txt <- "~/.calcofi_db_pass.txt"
 stopifnot(file.exists(db_pass_txt))
 
 con <- DBI::dbConnect(
@@ -47,14 +51,14 @@ function() {
 
 # /timeseries ----
 #* Get time series data
-#* @param variable The variable of interest. Must be one listed in `/variables`.
-#* @param aoi_wkt Area of Interest (AOI) spatially described as well known text (WKT). Defaults to NULL, i.e. no filter or entire dataset.
-#* @param depth_m_min Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
-#* @param depth_m_max Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
-#* @param date_beg Date to begin, e.g. "2000-01-01". Defaults to NULL, i.e. no filter or entire dataset.
-#* @param date_end Date to end, e.g. "2020-12-31". Defaults to NULL, i.e. no filter or entire dataset.
-#* @param time_step time step over which to summarize; one of: a sequential increment ("decade", "year", "year.quarter", "year.month", "year.week", "date") or a climatology ("quarter","month","week","julianday","hour"). default is "year". If NULL then all values are returned, i.e. no aggregation by `time_step` or `stats` are applicable.
-#* @param stats Statistics to show per `time_step`. Defaults to "mean, p05, p95". Acceptable comma-separated values include: "min", "median", "max", "sd" or "p#" where "sd" is the standard deviation and "p#" represents the percentile value 0 to 100 within available range of values for given aggregated `time_step`.
+#* @param variable:str The variable of interest. Must be one listed in `/variables`.
+#* @param aoi_wkt:str Area of Interest (AOI) spatially described as well known text (WKT). Defaults to NULL, i.e. no filter or entire dataset.
+#* @param depth_m_min:int Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_beg:str Date to begin, e.g. "2000-01-01". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_end:str Date to end, e.g. "2020-12-31". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param time_step:str time step over which to summarize; one of: a sequential increment ("decade", "year", "year.quarter", "year.month", "year.week", "date") or a climatology ("quarter","month","week","julianday","hour"). default is "year". If NULL then all values are returned, i.e. no aggregation by `time_step` or `stats` are applicable.
+#* @param stats:[str] Statistics to show per `time_step`. Defaults to "p05", "avg", "p95". Acceptable comma-separated values include: "avg", "median", "min", "max", "sd" or "p#" where "sd" is the standard deviation and "p#" represents the percentile value 0 to 100 within available range of values for given aggregated `time_step`.
 #* @get /timeseries
 #* @serializer csv
 function(
@@ -63,7 +67,7 @@ function(
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
   time_step = "year",
-  stats = "avg, q10, q90"){
+  stats = c("p10", "avg", "p90")){
   
   # DEBUG
   # variable = "ctdcast_bottle.t_deg_c"
@@ -76,7 +80,7 @@ function(
   # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
   # date_beg = NULL; date_end = NULL
   # time_step = "year"
-  # stats = "mean, p10, p90"
+  # stats = "p10, mean, p90"
   # depth_m_min = NULL; depth_m_max = NULL
   
   # TODO: 
@@ -136,9 +140,9 @@ function(
     TRUE ~ "TRUE")
   
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= '{depth_m_min}' AND depth_m <= '{depth_m_max}'"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= '{depth_m_max}'"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= '{depth_m_min}'"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   # TODO: get median, percentile ----
@@ -167,7 +171,120 @@ function(
   d
 }
 
-# / ----
+
+# /cruises ----
+#* Get list of cruises with summary stats as CSV table for time (`date_beg`)
+#* @get /variables
+#* @serializer csv
+function() {
+
+  # TODO: add ctdcast indexes to db for: cruise_id, date, lon_dec, lat_dec
+  d <- tbl(con, "ctdcast") %>% 
+    group_by(cruise_id) %>% 
+    summarize(
+      date_beg = min(date, na.rm=T),
+      date_end = max(date, na.rm=T),
+      lon_min  = min(lon_dec, na.rm=T),
+      lon_max  = max(lon_dec, na.rm=T),
+      lat_min  = min(lat_dec, na.rm=T),
+      lat_max  = max(lat_dec, na.rm=T),
+      n_casts = n(),
+      .groups = "drop") %>% 
+    arrange(cruise_id) %>% 
+    collect()
+}
+
+# /raster ----
+#* Get raster of variable
+#* @param variable:str The variable of interest. Must be one listed in `/variables`.
+#* @param cruise_id:str The `cruise_id` identifier. Must be one listed in `/cruises`.
+#* @param depth_m_min:int Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @get /raster
+#* @serializer contentType list(type="image/tif")
+function(variable = "ctdcast_bottle.t_deg_c", cruise_id = "2020-01-05-C-33RL", depth_m_min = 0, depth_m_max = 100){
+  # @serializer tiff
+  # test values
+  # variable = "ctdcast_bottle.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
+  # variable = "ctdcast_bottle.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
+  # variable = "ctdcast_bottle_dic.bottle_o2_mmol_kg"; cruise_id = "1949-03-01-C-31CR"; variable = ""; depth_m_min = 0; depth_m_max = 1000
+  
+  # check input arguments ----
+  
+  args_in <- as.list(match.call(expand.dots=FALSE))[-1]
+  hash    <- digest(args_in, algo="crc32")
+  f_tif   <- glue("{dir_cache}/api_raster_{hash}.tif")
+  # f_tif <- "/tmp/api_raster_dd83f5a7.tif"
+  
+  if (file.exists(f_tif)){
+    message(glue("reading from cache: {basename(f_tif)}"))
+    readBin(f_tif, "raw", n = file.info(f_tif)$size) %>% 
+    return()
+  }
+  
+  # variable
+  v <- tbl(con, "field_labels") %>% 
+    filter(table_field == !!variable) %>% 
+    collect() %>% 
+    separate(table_field, into=c("tbl", "fld"), sep="\\.", remove=F)
+  stopifnot(nrow(v) == 1)
+  
+  # construct SQL
+  q_from <- case_when(
+    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
+    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+  
+  q_where_depth = case_when(
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
+    TRUE ~ "TRUE")
+  
+  q <- glue(
+    "SELECT 
+      AVG({v$fld}) AS {v$fld}, 
+      STDDEV({v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs,
+      geom
+    FROM {q_from}
+    WHERE 
+      {q_where_depth} AND
+      cruise_id = '{cruise_id}'
+    GROUP BY geom")
+  message(q)
+  pts_gcs <- st_read(con, query=q)
+  
+  # TODO: figure out why all points are repeating and if that makes sense
+  # cruise_id = "2020-01-05-C-33RL"; variable = "ctdcast_bottle.t_deg_c"; depth_m_min = 0; depth_m_max = 10
+  # table(pts$n_obs)
+  #    3  4  5  6 
+  #   52 36 13  2
+
+  # transform from geographic coordinate system (gcs) 
+  #   to web mercator (mer) for direct use with leaflet::addRasterImage()
+  pts_mer <- st_transform(pts_gcs, 3857)
+  h <- st_convex_hull(st_union(pts_mer)) %>% st_as_sf() %>% mutate(one = 1)
+  # library(mapview); mapviewOptions(fgb = F); mapview(h)
+  r <- raster(as_Spatial(h), res=1000, crs=3857)
+  z <- rasterize(as_Spatial(h), r, "one")
+  
+  # inverse distance weighted interpolation
+  #   https://rspatial.org/raster/analysis/4-interpolation.html
+  
+  
+  # TODO: kriging, log/log10 transformations
+  # IDW
+  var <- sym(v$fld)
+  frm <- eval(expr(!!var~1))
+  gs <- gstat(formula=frm, locations=pts_mer, set = list(idp = .5), nmax=10)
+  idw <- interpolate(z, gs)
+  w <- mask(idw, z)
+  
+  message(glue("writing to: {basename(f_tif)}")) # api_raster_a0f732d3.tif
+  writeRaster(w, f_tif, overwrite=T)
+  readBin(f_tif, "raw", n = file.info(f_tif)$size)
+}
+
+# / home redirect ----
 #* redirect to the swagger interface 
 #* @get /
 #* @serializer html
