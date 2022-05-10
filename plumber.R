@@ -135,14 +135,14 @@ function(
 
   q_where_date = case_when(
     !is.null(date_beg) & !is.null(date_end) ~ glue2("date >= '{date_beg}' AND date <= '{date_end}'"),
-     is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
+    is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
     !is.null(date_beg) &  is.null(date_end) ~ glue2("date >= '{date_beg}'"),
     TRUE ~ "TRUE")
-  
+
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   # TODO: get median, percentile ----
@@ -150,7 +150,7 @@ function(
   # https://www.postgresql.org/docs/9.4/functions-aggregate.html
   
   q <- glue(
-    "SELECT {q_time_step} AS {time_step}, AVG({v$fld}) AS {v$fld}_avg, STDDEV({v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
+    "SELECT {q_time_step} AS {time_step}, AVG({v$tbl}.{v$fld}) AS {v$fld}_avg, STDDEV({v$tbl}.{v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
     FROM {q_from}
     WHERE {q_where_aoi} AND {q_where_date} AND {q_where_depth}
     GROUP BY {q_time_step} 
