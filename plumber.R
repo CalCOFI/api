@@ -190,7 +190,7 @@ function() {
       lat_max  = max(lat_dec, na.rm=T),
       n_casts = n(),
       .groups = "drop") %>% 
-    arrange(cruise_id) %>% 
+    arrange(desc(cruise_id)) %>% 
     collect()
 }
 
