@@ -67,7 +67,7 @@ function(
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
   time_step = "year",
-  stats = c("p10", "avg", "p90")){
+  stats = c("avg", "sd")){
   
   # DEBUG
   # variable = "ctdcast_bottle.t_deg_c"
