@@ -148,7 +148,7 @@ function(
     TRUE ~ "TRUE")
 
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min} AND {v$tbl}.depthm <= {depth_m_max}"),
      is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm <= {depth_m_max}"),
     !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min}"),
     TRUE ~ "TRUE")
@@ -187,18 +187,18 @@ function(
 function() {
 
   # TODO: add ctdcast indexes to db for: cruise_id, date, lon_dec, lat_dec
-  d <- tbl(con, "ctdcast") %>% 
-    group_by(cruise_id) %>% 
+  tbl(con, "ctd_casts") %>% 
+    group_by(cruiseid) %>% 
     summarize(
       date_beg = min(date, na.rm=T),
       date_end = max(date, na.rm=T),
-      lon_min  = min(lon_dec, na.rm=T),
-      lon_max  = max(lon_dec, na.rm=T),
-      lat_min  = min(lat_dec, na.rm=T),
-      lat_max  = max(lat_dec, na.rm=T),
+      lon_min  = min(longitude, na.rm=T),
+      lon_max  = max(longitude, na.rm=T),
+      lat_min  = min(latitude, na.rm=T),
+      lat_max  = max(latitude, na.rm=T),
       n_casts = n(),
       .groups = "drop") %>% 
-    arrange(desc(cruise_id)) %>% 
+    arrange(desc(cruiseid)) %>% 
     collect()
 }
 
