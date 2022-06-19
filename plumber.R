@@ -8,6 +8,7 @@ if (!require("librarian")){
 librarian::shelf(
   DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
+select = dplyr::select
 
 # paths ----
 db_pass_txt <- "~/.calcofi_db_pass.txt"
@@ -23,6 +24,9 @@ con <- DBI::dbConnect(
   port     = 5432,
   user     = "admin",
   password = readLines(db_pass_txt))
+
+# test db connection
+# dbListTables(con)
 
 # helper functions ----
 glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
@@ -46,6 +50,8 @@ function() {
   
   tbl(con, "field_labels") %>% 
     # filter(table %>% starts_with("cast_bottle")) %>% 
+    filter(active) %>% 
+    select(-active) %>% 
     collect()
 }
 
@@ -62,7 +68,7 @@ function() {
 #* @get /timeseries
 #* @serializer csv
 function(
-  variable = "ctdcast_bottle.t_deg_c", 
+  variable = "ctd_bottles.t_degc", 
   aoi_wkt = NULL, 
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
@@ -70,18 +76,18 @@ function(
   stats = c("avg", "sd")){
   
   # DEBUG
-  # variable = "ctdcast_bottle.t_deg_c"
-  # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
-  #   filter(nms == "CINMS")
-  # aoi_wkt <- aoi_sf %>%
-  #   pull(geom) %>%
-  #   st_as_text()
-  # st_bbox(aoi_sf) %>% st_as_sfc() %>% st_as_text()
+  # variable = "ctd_bottles.t_degc"
   # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
   # date_beg = NULL; date_end = NULL
   # time_step = "year"
   # stats = "p10, mean, p90"
   # depth_m_min = NULL; depth_m_max = NULL
+
+  # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
+  #   filter(nms == "CINMS")
+  # aoi_wkt <- aoi_sf %>%
+  #   pull(geom) %>%
+  #   st_as_text()
   
   # TODO: 
   
@@ -125,12 +131,14 @@ function(
     q_time_step = "datetime"
   
   q_from <- case_when(
-    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
-    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+    # v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
+    # v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+    v$tbl == 'ctd_bottles'     ~ "ctd_casts JOIN ctd_bottles     ON ctd_casts.cast_count = ctd_bottles.cst_cnt",
+    v$tbl == 'ctd_bottles_dic' ~ "ctd_casts JOIN ctd_bottles_dic ON ctd_casts.cast_count = ctd_bottles_dic.cst_cnt")
 
   q_where_aoi = ifelse(
     !is.null(aoi_wkt),
-    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctdcast.geom)"),
+    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctd_casts.geom)"),
     "TRUE")
 
   q_where_date = case_when(
@@ -140,9 +148,9 @@ function(
     TRUE ~ "TRUE")
 
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   # TODO: get median, percentile ----
