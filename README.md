@@ -22,9 +22,9 @@ Install `pm2`:
 ```bash
 sudo su -
 sudo -u shiny ln -s /share/.calcofi_db_pass.txt /home/shiny/.calcofi_db_pass.txt
-apt-get update
-apt-get install nodejs npm
-npm install -g pm2
+sudo apt-get update
+sudo apt-get install nodejs npm
+sudo npm install -g pm2
 exit
 sudo pm2 startup
 ```

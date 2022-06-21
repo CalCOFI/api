@@ -8,9 +8,13 @@ if (!require("librarian")){
 librarian::shelf(
   DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
+<<<<<<< HEAD
 # librarian::shelf(
 #   DBI, dbplyr, digest, dplyr, glue, here, lubridate, 
 #   raster, RPostgres, sf, stringr, tidyr)
+=======
+select = dplyr::select
+>>>>>>> 5fc457cf94a2ca1a315604c3e0b8adb374549722
 
 # paths ----
 db_pass_txt <- "~/.calcofi_db_pass.txt"
@@ -27,6 +31,9 @@ con <- DBI::dbConnect(
   port     = 5432,
   user     = "admin",
   password = readLines(db_pass_txt))
+
+# test db connection
+# dbListTables(con)
 
 # helper functions ----
 glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
@@ -50,6 +57,8 @@ function() {
   
   tbl(con, "field_labels") %>% 
     # filter(table %>% starts_with("cast_bottle")) %>% 
+    filter(active) %>% 
+    select(-active) %>% 
     collect()
 }
 
@@ -79,13 +88,17 @@ function() {
 #* @get /timeseries
 #* @serializer csv
 function(
+<<<<<<< HEAD
   variable = "ctdcast_bottle.t_deg_c", 
   species_group = NULL,
+=======
+  variable = "ctd_bottles.t_degc", 
+>>>>>>> 5fc457cf94a2ca1a315604c3e0b8adb374549722
   aoi_wkt = NULL, 
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
   time_step = "year",
-  stats = c("p10", "avg", "p90")){
+  stats = c("avg", "sd")){
   
   # DEBUG
   # variable = "ctdcast_bottle.t_deg_c"
@@ -97,11 +110,18 @@ function(
   # st_bbox(aoi_sf) %>% st_as_sfc() %>% st_as_text()
   # variable = "larvae_counts.count"
   # species_group = "Anchovy"
+  # variable = "ctd_bottles.t_degc"
   # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
   # date_beg = NULL; date_end = NULL
   # time_step = "year"
   # stats = "p10, mean, p90"
   # depth_m_min = NULL; depth_m_max = NULL
+
+  # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
+  #   filter(nms == "CINMS")
+  # aoi_wkt <- aoi_sf %>%
+  #   pull(geom) %>%
+  #   st_as_text()
   
   # check input arguments ----
   
@@ -161,14 +181,14 @@ function(
 
   q_where_date = case_when(
     !is.null(date_beg) & !is.null(date_end) ~ glue2("date >= '{date_beg}' AND date <= '{date_end}'"),
-     is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
+    is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
     !is.null(date_beg) &  is.null(date_end) ~ glue2("date >= '{date_beg}'"),
     TRUE ~ "TRUE")
-  
+
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min} AND {v$tbl}.depthm <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   q_where_species_group = "TRUE"
@@ -323,7 +343,7 @@ function(
   # https://www.postgresql.org/docs/9.4/functions-aggregate.html
   
   q <- glue(
-    "SELECT {q_time_step} AS {time_step}, AVG({v$fld}) AS {v$fld}_avg, STDDEV({v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
+    "SELECT {q_time_step} AS {time_step}, AVG({v$tbl}.{v$fld}) AS {v$fld}_avg, STDDEV({v$tbl}.{v$fld}) AS {v$fld}_sd, COUNT(*) AS n_obs
     FROM {q_from}
     WHERE {q_where_aoi} AND {q_where_date} AND {q_where_depth}
     GROUP BY {q_time_step} 
@@ -352,18 +372,18 @@ function(
 function() {
 
   # TODO: add ctdcast indexes to db for: cruise_id, date, lon_dec, lat_dec
-  d <- tbl(con, "ctdcast") %>% 
-    group_by(cruise_id) %>% 
+  tbl(con, "ctd_casts") %>% 
+    group_by(cruiseid) %>% 
     summarize(
       date_beg = min(date, na.rm=T),
       date_end = max(date, na.rm=T),
-      lon_min  = min(lon_dec, na.rm=T),
-      lon_max  = max(lon_dec, na.rm=T),
-      lat_min  = min(lat_dec, na.rm=T),
-      lat_max  = max(lat_dec, na.rm=T),
+      lon_min  = min(longitude, na.rm=T),
+      lon_max  = max(longitude, na.rm=T),
+      lat_min  = min(latitude, na.rm=T),
+      lat_max  = max(latitude, na.rm=T),
       n_casts = n(),
       .groups = "drop") %>% 
-    arrange(cruise_id) %>% 
+    arrange(desc(cruiseid)) %>% 
     collect()
 }
 
