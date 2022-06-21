@@ -8,13 +8,10 @@ if (!require("librarian")){
 librarian::shelf(
   DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
-<<<<<<< HEAD
 # librarian::shelf(
 #   DBI, dbplyr, digest, dplyr, glue, here, lubridate, 
 #   raster, RPostgres, sf, stringr, tidyr)
-=======
 select = dplyr::select
->>>>>>> 5fc457cf94a2ca1a315604c3e0b8adb374549722
 
 # paths ----
 db_pass_txt <- "~/.calcofi_db_pass.txt"
@@ -88,12 +85,8 @@ function() {
 #* @get /timeseries
 #* @serializer csv
 function(
-<<<<<<< HEAD
-  variable = "ctdcast_bottle.t_deg_c", 
-  species_group = NULL,
-=======
   variable = "ctd_bottles.t_degc", 
->>>>>>> 5fc457cf94a2ca1a315604c3e0b8adb374549722
+  species_group = NULL,
   aoi_wkt = NULL, 
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
