@@ -8,6 +8,9 @@ if (!require("librarian")){
 librarian::shelf(
   DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
+# librarian::shelf(
+#   DBI, dbplyr, digest, dplyr, glue, here, lubridate, 
+#   raster, RPostgres, sf, stringr, tidyr)
 
 # paths ----
 db_pass_txt <- "~/.calcofi_db_pass.txt"
@@ -20,6 +23,7 @@ con <- DBI::dbConnect(
   RPostgres::Postgres(),
   dbname   = "gis",
   host     = "db.calcofi.io",
+  # host     = "localhost",
   port     = 5432,
   user     = "admin",
   password = readLines(db_pass_txt))
@@ -37,7 +41,7 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
 }
 
 # /variables ----
-#* Get list of variables
+#* Get list of variables for use in `/timeseries`
 #* @get /variables
 #* @serializer csv
 function() {
@@ -49,9 +53,22 @@ function() {
     collect()
 }
 
+# /species_groups ----
+#* Get list of species groups for use with variable `larvae_counts.count` in `/timeseries`
+#* @get /species_groups
+#* @serializer csv
+function() {
+  tbl(con, "species_groups") %>% 
+    left_join(
+      tbl(con, "species_codes"), 
+      by="spccode")
+    collect()
+}
+
 # /timeseries ----
 #* Get time series data
 #* @param variable:str The variable of interest. Must be one listed in `/variables`.
+#* @param species_group:str If using variable `larvae_counts.count`, then species grouping. Must be one listed in `/species_groups`.
 #* @param aoi_wkt:str Area of Interest (AOI) spatially described as well known text (WKT). Defaults to NULL, i.e. no filter or entire dataset.
 #* @param depth_m_min:int Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
 #* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
@@ -63,6 +80,7 @@ function() {
 #* @serializer csv
 function(
   variable = "ctdcast_bottle.t_deg_c", 
+  species_group = NULL,
   aoi_wkt = NULL, 
   depth_m_min = NULL, depth_m_max = NULL,
   date_beg = NULL, date_end = NULL, 
@@ -77,13 +95,13 @@ function(
   #   pull(geom) %>%
   #   st_as_text()
   # st_bbox(aoi_sf) %>% st_as_sfc() %>% st_as_text()
+  # variable = "larvae_counts.count"
+  # species_group = "Anchovy"
   # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
   # date_beg = NULL; date_end = NULL
   # time_step = "year"
   # stats = "p10, mean, p90"
   # depth_m_min = NULL; depth_m_max = NULL
-  
-  # TODO: 
   
   # check input arguments ----
   
@@ -125,12 +143,20 @@ function(
     q_time_step = "datetime"
   
   q_from <- case_when(
-    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
-    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+    v$tbl == "ctdcast_bottle"     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
+    v$tbl == "ctdcast_bottle_dic" ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)",
+    v$tbl == "larvae_counts"      ~ "larvae_counts 
+        JOIN tows USING (cruise, ship, orderocc, towtype, townum, netloc)
+        JOIN stations USING (cruise, ship, orderocc)
+        LEFT JOIN species_groups USING (spccode)")
 
+  tbl.geom <- case_when(
+    v$tbl %in% c("ctdcast_bottle", "ctdcast_bottle_dic") ~  "ctdcast.geom",
+    v$tbl == "larvae_counts" ~ "stations.geom")
+  
   q_where_aoi = ifelse(
     !is.null(aoi_wkt),
-    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctdcast.geom)"),
+    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), {tbl.geom})"),
     "TRUE")
 
   q_where_date = case_when(
@@ -142,6 +168,153 @@ function(
   q_where_depth = case_when(
     !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
      is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
+    TRUE ~ "TRUE")
+  
+  q_where_species_group = "TRUE"
+  
+  # special case of Larvae
+  # TODO: add starboard filter
+  if (v$tbl == "larvae_counts"){
+    # larval tows only at surface, so turn off depth filter
+    q_where_depth = "TRUE"
+    
+    # offset by percsorted (increasing count if < 100%) and divide by unit effort
+    v$fld = "count / percsorted / volsampled"
+    
+    if (!is.null(species_group)){
+      # check species_group is valid
+      spp <- tbl(con, "species_groups") %>% filter(group == species_group) %>% pull(spccode)
+      if (length(spp) == 0 ) stop("species_group invalid -- returns 0 species") 
+      
+      q_where_species_group = glue("spp_group = '{species_group}'")
+    }
+  }
+  
+  # TODO: get median, percentile ----
+  # https://leafo.net/guides/postgresql-calculating-percentile.html
+  # https://www.postgresql.org/docs/9.4/functions-aggregate.html
+  
+  q <- glue(
+    "SELECT 
+      {q_time_step} AS {time_step}, 
+      AVG({v$fld}) AS val_avg, STDDEV({v$fld}) AS val_sd, 
+      COUNT(*) AS n_obs
+    FROM {q_from}
+    WHERE {q_where_aoi} AND {q_where_date} AND {q_where_depth} AND {q_where_species_group}
+    GROUP BY {q_time_step} 
+    ORDER BY {time_step}")
+  message(q)
+  d <- dbGetQuery(con, q)
+
+  # TODO: add attributes like Cristina's original function  
+  # attr(d_aoi_summ, "labels")    <- eval(parse(text = glue("var_lookup$`{var}`")))
+  # attr(d_aoi_summ, "time_step") <- time_step
+  # attr(d_aoi_summ, "date_msg")  <- glue("This dataset was summarized by {time_step}.")
+  # attr(d_aoi_summ, "aoi") <- ifelse(
+  #   empty_data_for_var,
+  #   glue("No data were found for {var} in this area of interest. Summaries were conducted across all existing data points."),
+  #   glue("Data for {var} in selected area of interest")
+  # )
+  
+  # d %>% readr::write_csv("tmp_larvae.csv")
+  
+  d
+}
+
+# /timeseries ----
+#* Get time series data
+#* @param variable:str The variable of interest. Must be one listed in `/variables`.
+#* @param aoi_wkt:str Area of Interest (AOI) spatially described as well known text (WKT). Defaults to NULL, i.e. no filter or entire dataset.
+#* @param depth_m_min:int Depth (meters) minimum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_beg:str Date to begin, e.g. "2000-01-01". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param date_end:str Date to end, e.g. "2020-12-31". Defaults to NULL, i.e. no filter or entire dataset.
+#* @param time_step:str time step over which to summarize; one of: a sequential increment ("decade", "year", "year.quarter", "year.month", "year.week", "date") or a climatology ("quarter","month","week","julianday","hour"). default is "year". If NULL then all values are returned, i.e. no aggregation by `time_step` or `stats` are applicable.
+#* @param stats:[str] Statistics to show per `time_step`. Defaults to "p05", "avg", "p95". Acceptable comma-separated values include: "avg", "median", "min", "max", "sd" or "p#" where "sd" is the standard deviation and "p#" represents the percentile value 0 to 100 within available range of values for given aggregated `time_step`.
+#* @get /timeseries
+#* @serializer csv
+function(
+    variable = "ctdcast_bottle.t_deg_c", 
+    aoi_wkt = NULL, 
+    depth_m_min = NULL, depth_m_max = NULL,
+    date_beg = NULL, date_end = NULL, 
+    time_step = "year",
+    stats = c("p10", "avg", "p90")){
+  
+  # DEBUG
+  # variable = "ctdcast_bottle.t_deg_c"
+  # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
+  #   filter(nms == "CINMS")
+  # aoi_wkt <- aoi_sf %>%
+  #   pull(geom) %>%
+  #   st_as_text()
+  # st_bbox(aoi_sf) %>% st_as_sfc() %>% st_as_text()
+  # aoi_wkt <- "POLYGON ((-120.6421 33.36241, -118.9071 33.36241, -118.9071 34.20707, -120.6421 34.20707, -120.6421 33.36241))"
+  # date_beg = NULL; date_end = NULL
+  # time_step = "year"
+  # stats = "p10, mean, p90"
+  # depth_m_min = NULL; depth_m_max = NULL
+  
+  # TODO: 
+  
+  # check input arguments ----
+  
+  # variable
+  v <- tbl(con, "field_labels") %>% 
+    filter(table_field == !!variable) %>% 
+    collect() %>% 
+    separate(table_field, into=c("tbl", "fld"), sep="\\.", remove=F)
+  stopifnot(nrow(v) == 1)
+  
+  # TODO: is_valid_date(), is_valid_aoi(): wkt, aoi_id
+  # if (!is.null(aoi_wkt))
+  #   aoi_sf <- st_as_sf(tibble(geom = aoi_wkt), wkt = "geom") %>% 
+  #     st_set_crs(4326)  # mapview::mapview(aoi_sf)
+  
+  # TODO: document DATE_PART() options
+  # https://www.postgresql.org/docs/13/functions-datetime.html#FUNCTIONS-DATETIME-EXTRACT
+  # is_valid_aoi(aoi)
+  # is_valid_date(date_beg)
+  # is_valid_date(date_end)
+  
+  stopifnot(time_step %in% c("decade","year","year.quarter","year.month","year.week","date","quarter","month","week","julianday","hour"))
+  # TODO: Describe non- vs climatalogical vars: "quarter","month","week","julianday"
+  q_time_step <- switch(
+    time_step,
+    decade       = "(DATE_PART('decade' , date) * 10) AS decade",
+    # year         = "DATE_PART('year'   , date) AS year",
+    year         = "DATE_PART('year'   , date)",
+    year.quarter = "DATE_PART('year'   , date) + (DATE_PART('quarter', date) * 0.1)  AS year.quarter",
+    year.month   = "DATE_PART('year'   , date) + (DATE_PART('month', date)   * 0.01) AS year.month",
+    year.week    = "DATE_PART('year'   , date) + (DATE_PART('week', date)    * 0.01) AS year.week",
+    date         = "date",
+    quarter      = "DATE_PART('quarter', date) AS quarter",
+    month        = "DATE_PART('month'  , date) AS month",
+    week         = "DATE_PART('week'   , date) AS week",
+    julianday    = "DATE_PART('doy'    , date) AS julianday",
+    hour         = "DATE_PART('hour'   , datetime) AS hour")
+  if (is.null(q_time_step))
+    q_time_step = "datetime"
+  
+  q_from <- case_when(
+    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
+    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+  
+  q_where_aoi = ifelse(
+    !is.null(aoi_wkt),
+    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctdcast.geom)"),
+    "TRUE")
+  
+  q_where_date = case_when(
+    !is.null(date_beg) & !is.null(date_end) ~ glue2("date >= '{date_beg}' AND date <= '{date_end}'"),
+    is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
+    !is.null(date_beg) &  is.null(date_end) ~ glue2("date >= '{date_beg}'"),
+    TRUE ~ "TRUE")
+  
+  q_where_depth = case_when(
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
+    is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
     !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
@@ -157,7 +330,7 @@ function(
     ORDER BY {time_step}")
   message(q)
   d <- dbGetQuery(con, q)
-
+  
   # TODO: add attributes like Cristina's original function  
   # attr(d_aoi_summ, "labels")    <- eval(parse(text = glue("var_lookup$`{var}`")))
   # attr(d_aoi_summ, "time_step") <- time_step
