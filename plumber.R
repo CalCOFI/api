@@ -94,7 +94,7 @@ function(
   stats = c("avg", "sd")){
   
   # DEBUG
-  # variable = "ctdcast_bottle.t_deg_c"
+  # variable = "ctd_bottles.t_deg_c"
   # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
   #   filter(nms == "CINMS")
   # aoi_wkt <- aoi_sf %>%
@@ -115,6 +115,15 @@ function(
   # aoi_wkt <- aoi_sf %>%
   #   pull(geom) %>%
   #   st_as_text()
+  
+  # variable = "ctd_bottles.t_degc"
+  # aoi_wkt = NULL
+  # depth_m_min = 0
+  # depth_m_max = 5351
+  # date_beg = "1949-02-28"
+  # date_end = "2020-01-26"
+  # time_step = "year"
+  # stats = c("mean", "sd")
   
   # check input arguments ----
   
@@ -156,15 +165,15 @@ function(
     q_time_step = "datetime"
   
   q_from <- case_when(
-    v$tbl == "ctdcast_bottle"     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
-    v$tbl == "ctdcast_bottle_dic" ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)",
-    v$tbl == "larvae_counts"      ~ "larvae_counts 
+    v$tbl == "ctd_bottles"    ~ "ctd_casts JOIN ctd_bottles USING (cast_count)",
+    v$tbl == "ctd_dic"        ~ "ctd_casts JOIN ctd_bottles USING (cast_count) JOIN ctd_dic USING (btl_cnt)",
+    v$tbl == "larvae_counts"  ~ "larvae_counts 
         JOIN tows USING (cruise, ship, orderocc, towtype, townum, netloc)
         JOIN stations USING (cruise, ship, orderocc)
         LEFT JOIN species_groups USING (spccode)")
 
   tbl.geom <- case_when(
-    v$tbl %in% c("ctdcast_bottle", "ctdcast_bottle_dic") ~  "ctdcast.geom",
+    v$tbl %in% c("ctd_bottles", "ctd_dic") ~  "ctd_casts.geom",
     v$tbl == "larvae_counts" ~ "stations.geom")
   
   q_where_aoi = ifelse(
@@ -248,7 +257,7 @@ function(
 #* @get /timeseries
 #* @serializer csv
 function(
-    variable = "ctdcast_bottle.t_deg_c", 
+    variable = "ctd_bottles.t_deg_c", 
     aoi_wkt = NULL, 
     depth_m_min = NULL, depth_m_max = NULL,
     date_beg = NULL, date_end = NULL, 
@@ -256,7 +265,7 @@ function(
     stats = c("p10", "avg", "p90")){
   
   # DEBUG
-  # variable = "ctdcast_bottle.t_deg_c"
+  # variable = "ctd_bottles.t_deg_c"
   # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
   #   filter(nms == "CINMS")
   # aoi_wkt <- aoi_sf %>%
@@ -311,12 +320,12 @@ function(
     q_time_step = "datetime"
   
   q_from <- case_when(
-    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
-    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+    v$tbl == 'ctd_bottles'     ~ "ctd_casts JOIN ctd_bottles USING (cast_count)",
+    v$tbl == 'ctd_bottles_dic' ~ "ctd_casts JOIN ctd_bottles USING (cast_count) JOIN ctd_dic USING (btl_cnt)")
   
   q_where_aoi = ifelse(
     !is.null(aoi_wkt),
-    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctdcast.geom)"),
+    glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), ctd_casts.geom)"),
     "TRUE")
   
   q_where_date = case_when(
@@ -364,7 +373,7 @@ function(
 #* @serializer csv
 function() {
 
-  # TODO: add ctdcast indexes to db for: cruise_id, date, lon_dec, lat_dec
+  # TODO: add ctd_casts indexes to db for: cruise_id, date, lon_dec, lat_dec
   tbl(con, "ctd_casts") %>% 
     group_by(cruiseid) %>% 
     summarize(
@@ -388,12 +397,12 @@ function() {
 #* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
 #* @get /raster
 #* @serializer contentType list(type="image/tif")
-function(variable = "ctdcast_bottle.t_deg_c", cruise_id = "2020-01-05-C-33RL", depth_m_min = 0, depth_m_max = 100){
+function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", depth_m_min = 0, depth_m_max = 100){
   # @serializer tiff
   # test values
-  # variable = "ctdcast_bottle.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
-  # variable = "ctdcast_bottle.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
-  # variable = "ctdcast_bottle_dic.bottle_o2_mmol_kg"; cruise_id = "1949-03-01-C-31CR"; variable = ""; depth_m_min = 0; depth_m_max = 1000
+  # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
+  # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
+  # variable = "ctd_bottles_dic.bottle_o2_mmol_kg"; cruise_id = "1949-03-01-C-31CR"; variable = ""; depth_m_min = 0; depth_m_max = 1000
   
   # check input arguments ----
   
@@ -417,8 +426,8 @@ function(variable = "ctdcast_bottle.t_deg_c", cruise_id = "2020-01-05-C-33RL", d
   
   # construct SQL
   q_from <- case_when(
-    v$tbl == 'ctdcast_bottle'     ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt)",
-    v$tbl == 'ctdcast_bottle_dic' ~ "ctdcast JOIN ctdcast_bottle USING (cst_cnt) JOIN ctdcast_bottle_dic USING (btl_cnt)")
+    v$tbl == "ctd_bottles" ~ "ctd_casts JOIN ctd_bottles USING (cast_count)",
+    v$tbl == "ctd_dic"     ~ "ctd_casts JOIN ctd_bottles USING (cast_count) JOIN ctd_dic USING (btl_cnt)")
   
   q_where_depth = case_when(
     !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
@@ -440,7 +449,7 @@ function(variable = "ctdcast_bottle.t_deg_c", cruise_id = "2020-01-05-C-33RL", d
   pts_gcs <- st_read(con, query=q)
   
   # TODO: figure out why all points are repeating and if that makes sense
-  # cruise_id = "2020-01-05-C-33RL"; variable = "ctdcast_bottle.t_deg_c"; depth_m_min = 0; depth_m_max = 10
+  # cruise_id = "2020-01-05-C-33RL"; variable = "ctd_bottles.t_deg_c"; depth_m_min = 0; depth_m_max = 10
   # table(pts$n_obs)
   #    3  4  5  6 
   #   52 36 13  2
