@@ -14,23 +14,11 @@ librarian::shelf(
 select = dplyr::select
 
 # paths ----
-db_pass_txt <- "~/.calcofi_db_pass.txt"
+dir_apps <- here("../apps")
 dir_cache <- "/tmp"
 
 # database ----
-stopifnot(file.exists(db_pass_txt))
-
-con <- DBI::dbConnect(
-  RPostgres::Postgres(),
-  dbname   = "gis",
-  host     = "db.calcofi.io",
-  # host     = "localhost",
-  port     = 5432,
-  user     = "admin",
-  password = readLines(db_pass_txt))
-
-# test db connection
-# dbListTables(con)
+source(glue("{dir_apps}/libs/db.R"))
 
 # helper functions ----
 glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
