@@ -391,10 +391,12 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
   # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
   # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
   # variable = "ctd_bottles_dic.bottle_o2_mmol_kg"; cruise_id = "1949-03-01-C-31CR"; variable = ""; depth_m_min = 0; depth_m_max = 1000
-  
+  # variable = "ctd_bottles.t_degc"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0L; depth_m_max = 5351L
   # check input arguments ----
   
   args_in <- as.list(match.call(expand.dots=FALSE))[-1]
+  # debug:
+  # args_in <- list(variable=variable, cruise_id=cruise_id, depth_m_min=depth_m_min, depth_m_max=depth_m_max)
   hash    <- digest(args_in, algo="crc32")
   f_tif   <- glue("{dir_cache}/api_raster_{hash}.tif")
   # f_tif <- "/tmp/api_raster_dd83f5a7.tif"
@@ -402,7 +404,7 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
   if (file.exists(f_tif)){
     message(glue("reading from cache: {basename(f_tif)}"))
     readBin(f_tif, "raw", n = file.info(f_tif)$size) %>% 
-    return()
+      return()
   }
   
   # variable
@@ -418,9 +420,9 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
     v$tbl == "ctd_dic"     ~ "ctd_casts JOIN ctd_bottles USING (cast_count) JOIN ctd_dic USING (btl_cnt)")
   
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depthm >= {depth_m_min} AND depthm <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depthm <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depthm >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   q <- glue(
@@ -431,7 +433,7 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
     FROM {q_from}
     WHERE 
       {q_where_depth} AND
-      cruise_id = '{cruise_id}'
+      cruiseid = '{cruise_id}'
     GROUP BY geom")
   message(q)
   pts_gcs <- st_read(con, query=q)
