@@ -80,9 +80,11 @@ function(
   date_beg = NULL, date_end = NULL, 
   time_step = "year",
   stats = c("avg", "sd")){
+  # TODO: ∆ `var = NULL,` to `var,` and use `!missing(var)` vs `!is.null(var)`
+  #         per https://community.rstudio.com/t/default-required-true-value-for-endpoint-parameters-in-plumber-r-package/130474
   
   # DEBUG
-  # variable = "ctd_bottles.t_deg_c"
+  # variable = "ctd_bottles.t_degc"
   # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
   #   filter(nms == "CINMS")
   # aoi_wkt <- aoi_sf %>%
@@ -245,7 +247,7 @@ function(
 #* @get /timeseries
 #* @serializer csv
 function(
-    variable = "ctd_bottles.t_deg_c", 
+    variable = "ctd_bottles.t_degc", 
     aoi_wkt = NULL, 
     depth_m_min = NULL, depth_m_max = NULL,
     date_beg = NULL, date_end = NULL, 
@@ -253,7 +255,7 @@ function(
     stats = c("p10", "avg", "p90")){
   
   # DEBUG
-  # variable = "ctd_bottles.t_deg_c"
+  # variable = "ctd_bottles.t_degc"
   # aoi_sf <- st_read(con, "aoi_fed_sanctuaries") %>%
   #   filter(nms == "CINMS")
   # aoi_wkt <- aoi_sf %>%
@@ -385,11 +387,11 @@ function() {
 #* @param depth_m_max:int Depth (meters) maximum. Defaults to NULL, i.e. no filter or entire dataset.
 #* @get /raster
 #* @serializer contentType list(type="image/tif")
-function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", depth_m_min = 0, depth_m_max = 100){
+function(variable = "ctd_bottles.t_degc", cruise_id = "2020-01-05-C-33RL", depth_m_min = 0, depth_m_max = 100){
   # @serializer tiff
   # test values
-  # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
-  # variable = "ctd_bottles.t_deg_c"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
+  # variable = "ctd_bottles.t_degc"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 10
+  # variable = "ctd_bottles.t_degc"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0; depth_m_max = 100
   # variable = "ctd_bottles_dic.bottle_o2_mmol_kg"; cruise_id = "1949-03-01-C-31CR"; variable = ""; depth_m_min = 0; depth_m_max = 1000
   # variable = "ctd_bottles.t_degc"; cruise_id = "2020-01-05-C-33RL"; depth_m_min = 0L; depth_m_max = 5351L
   # check input arguments ----
@@ -439,7 +441,7 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
   pts_gcs <- st_read(con, query=q)
   
   # TODO: figure out why all points are repeating and if that makes sense
-  # cruise_id = "2020-01-05-C-33RL"; variable = "ctd_bottles.t_deg_c"; depth_m_min = 0; depth_m_max = 10
+  # cruise_id = "2020-01-05-C-33RL"; variable = "ctd_bottles.t_degc"; depth_m_min = 0; depth_m_max = 10
   # table(pts$n_obs)
   #    3  4  5  6 
   #   52 36 13  2
@@ -467,6 +469,120 @@ function(variable = "ctd_bottles.t_deg_c", cruise_id = "2020-01-05-C-33RL", dept
   message(glue("writing to: {basename(f_tif)}")) # api_raster_a0f732d3.tif
   writeRaster(w, f_tif, overwrite=T)
   readBin(f_tif, "raw", n = file.info(f_tif)$size)
+}
+
+# /cruise_lines ----
+#* Get station lines from cruises (with more than one cast)
+#* @param cruise_id:str The `cruise_id` identifier. Must be one listed in `/cruises`.
+#* @get /cruise_lines
+#* @serializer csv
+function(cruise_id){
+  cruises <- dbGetQuery(con, "SELECT DISTINCT cruiseid FROM ctd_casts") %>% 
+    pull(cruiseid)
+  # (cruise_id <- cruises[1])  # 2020-01-05-C-33RL
+  stopifnot(cruise_id %in% cruises)
+
+  # get casts, filtering by cruise
+  casts <- tbl(con, "ctd_casts") %>% 
+    filter(cruiseid == !!cruise_id) %>% 
+    select(cast_count, sta_id, date, longitude, latitude) %>% 
+    collect() %>% 
+    separate(
+      sta_id, into = c("sta_line", "sta_offshore"), 
+      sep = " ", convert = T, remove = F) %>% 
+    mutate(
+      day = difftime(date, min(date), units="days") %>% 
+        as.integer()) # %>% 
+    # st_as_sf(
+    #   coords = c("longitude", "latitude"),
+    #   crs = 4326, remove = F)
+  
+  # mapview(casts, zcol="sta_line")
+  # mapview(casts, zcol="sta_offshore")
+  # mapview(casts, zcol="day")
+  
+  # table(casts$sta_line)
+  
+  # remove station lines with only one cast
+  casts <- casts %>% 
+    group_by(sta_line) %>% 
+    mutate(sta_line_n = n()) %>% 
+    filter(sta_line_n > 1)
+  
+  # table(casts$sta_line)
+  casts
+}
+
+# /cruise_line_profile ----
+#* Get profile at depths for given variable of casts along line of stations
+#* @param cruise_id:str The `cruise_id` identifier. Must be one listed in `/cruises`.
+#* @param sta_line:numeric The `sta_line` identifying the alongshore component of the station id. Must be one listed in `/cruise_line`.
+#* @param variable:str The variable of interest. Must be one listed in `/variables`.
+#* @get /cruise_line_profile
+#* @serializer csv
+function(cruise_id, sta_line, variable){
+  # cruise_id='2020-01-05-C-33RL'; sta_line = 60; variable = "ctd_bottles.t_degc"
+  
+  cruises <- dbGetQuery(con, "SELECT DISTINCT cruiseid FROM ctd_casts") %>% 
+    pull(cruiseid)
+  # (cruise_id <- cruises[1]) # "2020-01-05-C-33RL"
+  stopifnot(cruise_id %in% cruises)
+  
+  cruise_lines <- tbl(con, "ctd_casts") %>% 
+    filter(cruiseid == !!cruise_id) %>% 
+    select(cast_count, sta_id, date, longitude, latitude) %>% 
+    collect() %>% 
+    separate(
+      sta_id, into = c("sta_line", "sta_offshore"), 
+      sep = " ", convert = T, remove = F) %>% 
+    mutate(
+      day = difftime(date, min(date), units="days") %>% 
+        as.integer()) %>% 
+    group_by(sta_line) %>% 
+    mutate(sta_line_n = n()) %>% 
+    filter(sta_line_n > 1) %>% 
+    distinct(sta_line) %>% 
+    pull(sta_line)
+  # (sta_line <- cruise_lines[1]) # 60
+  stopifnot(sta_line %in% cruise_lines)
+  
+  # variable
+  v <- tbl(con, "field_labels") %>% 
+    filter(table_field == !!variable) %>% 
+    collect() %>% 
+    separate(table_field, into=c("tbl", "fld"), sep="\\.", remove=F)
+  stopifnot(nrow(v) == 1)
+  
+  # get casts, filtering by cruise
+  casts <- tbl(con, "ctd_casts") %>% 
+    filter(cruiseid == !!cruise_id) %>% 
+    select(cast_count, sta_id, date, longitude, latitude) %>% 
+    collect() %>% 
+    separate(
+      sta_id, into = c("sta_line", "sta_offshore"), 
+      sep = " ", convert = T, remove = F) %>% 
+    mutate(
+      day = difftime(date, min(date), units="days") %>% 
+        as.integer()) %>%
+    mutate(sta_line_n = n()) %>% 
+    filter(sta_line_n > 1) %>% 
+    # filter by station line
+    filter(sta_line == !!sta_line)
+  
+  bottles <- dbGetQuery(
+    con,
+    glue(
+      "SELECT cast_count, depthm, {v$fld} 
+      FROM ctd_bottles
+      WHERE cast_count IN ({paste(casts$cast_count, collapse=',')})"))
+  d <- casts %>%
+    inner_join(
+      bottles,
+      by="cast_count") %>% 
+    # st_drop_geometry() %>% 
+    # select(sta_offshore, sta_line, depthm, t_degc) %>% 
+    arrange(sta_offshore, sta_line, depthm)
+  d
 }
 
 # / home redirect ----
