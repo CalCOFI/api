@@ -178,9 +178,9 @@ function(
     TRUE ~ "TRUE")
 
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min} AND {v$tbl}.depthm <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depthm <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depthm >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   q_where_species_group = "TRUE"
@@ -422,9 +422,9 @@ function(variable = "ctd_bottles.t_degc", cruise_id = "2020-01-05-C-33RL", depth
     v$tbl == "ctd_dic"     ~ "ctd_casts JOIN ctd_bottles USING (cast_count) JOIN ctd_dic USING (btl_cnt)")
   
   q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depthm >= {depth_m_min} AND depthm <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depthm <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depthm >= {depth_m_min}"),
+    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min} AND depth_m <= {depth_m_max}"),
+     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("depth_m <= {depth_m_max}"),
+    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("depth_m >= {depth_m_min}"),
     TRUE ~ "TRUE")
   
   q <- glue(
@@ -572,7 +572,7 @@ function(cruise_id, sta_line, variable){
   bottles <- dbGetQuery(
     con,
     glue(
-      "SELECT cast_count, depthm, {v$fld} 
+      "SELECT cast_count, depth_m, {v$fld} 
       FROM ctd_bottles
       WHERE cast_count IN ({paste(casts$cast_count, collapse=',')})"))
   d <- casts %>%
@@ -580,8 +580,8 @@ function(cruise_id, sta_line, variable){
       bottles,
       by="cast_count") %>% 
     # st_drop_geometry() %>% 
-    # select(sta_offshore, sta_line, depthm, t_degc) %>% 
-    arrange(sta_offshore, sta_line, depthm)
+    # select(sta_offshore, sta_line, depth_m, t_degc) %>% 
+    arrange(sta_offshore, sta_line, depth_m)
   d
 }
 
