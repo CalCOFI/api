@@ -6,7 +6,7 @@ if (!require("librarian")){
   library(librarian)
 }
 librarian::shelf(
-  DBI, dbplyr, digest, dplyr, glue, gstat, here, lubridate, 
+  DBI, dbplyr, digest, dplyr, glue, gstat, here, httr2, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
 # librarian::shelf(
 #   DBI, dbplyr, digest, dplyr, glue, here, lubridate, 
@@ -31,6 +31,40 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
       out }}
   glue(x, .transformer = null_transformer(null_str), .envir = .envir, ...)
 }
+
+# /net2cruise ----
+# https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
+#* Get net2cruise rows
+#* @param netid_min:int min netid value
+#* @param netid_max:int max netid value
+#* @param fields:[str] fields to include in output
+#* @serializer csv
+#* @get /net2cruise
+function(
+    netid_min = 18149,
+    netid_max = 18155,
+    fields = c("netid", "cruise_ymd", "latitude", "longitude")) {
+  
+  # debug by setting a browser
+  # browser()
+  
+  # method 1: direct database connection
+  y <- tbl(con, "net2cruise") |>
+    filter(
+      netid >= netid_min,
+      netid <= netid_max) |> 
+    select(all_of(fields)) |>  # https://dplyr.tidyverse.org/articles/programming.html
+    collect()
+  
+  # method 2: postgres intermediary API
+  # url <- "https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude"
+  # req <- request(url)
+  # y <- req_perform(req) |> 
+  #   resp_body_json()
+  
+  y
+}
+
 
 # /variables ----
 #* Get list of variables for use in `/timeseries`
@@ -73,12 +107,14 @@ function() {
 #* @get /timeseries
 #* @serializer csv
 function(
-  variable = "ctd_bottles.t_degc", 
+  variable      = "ctd_bottles.t_degc", 
   species_group = NULL,
-  aoi_wkt = NULL, 
-  depth_m_min = NULL, depth_m_max = NULL,
-  date_beg = NULL, date_end = NULL, 
-  time_step = "year",
+  aoi_wkt       = NULL, 
+  depth_m_min   = NULL, 
+  depth_m_max   = NULL,
+  date_beg      = NULL, 
+  date_end      = NULL, 
+  time_step     = "year",
   stats = c("avg", "sd")){
   # TODO: ∆ `var = NULL,` to `var,` and use `!missing(var)` vs `!is.null(var)`
   #         per https://community.rstudio.com/t/default-required-true-value-for-endpoint-parameters-in-plumber-r-package/130474

@@ -7,7 +7,7 @@ Test application programming interface (API)
 Run the API in the background from server's RStudio Terminal:
 
 ```bash
-Rscript /share/github/api/run_api.R &
+Rscript /share/github/api/run-api.R &
 ```
 
 ## Host API web service
@@ -32,7 +32,7 @@ sudo pm2 startup
 Setup web service:
 
 ```bash
-sudo -u shiny pm2 start --interpreter="Rscript" --image-name="run-api" /share/github/api/run-api.R
+sudo -u shiny pm2 start --interpreter="Rscript" --image-name="run-api" '/share/github/api/run-api.R'
 sudo -u shiny pm2 save
 ```
 
