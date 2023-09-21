@@ -32,29 +32,107 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
   glue(x, .transformer = null_transformer(null_str), .envir = .envir, ...)
 }
 
-# /net2cruise ----
-# https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
-#* Get net2cruise rows
-#* @param netid_min:int min netid value
-#* @param netid_max:int max netid value
-#* @param fields:[str] fields to include in output
+# /cruises ----
+#* Get list of cruises with summary stats as CSV table for time (`date_beg`)
+#* @param start_date:str starting date for search
+#* @param end_date:str end date for search
+#* @get /cruises
 #* @serializer csv
-#* @get /net2cruise
+function(  start_date = "1949-01-01",
+           end_date = Sys.Date() |> format("%Y-%m-%d")) {
+  
+  # TODO: add ctd_casts indexes to db for: cruise_id, date, lon_dec, lat_dec
+
+  tbl(con, "ctd_casts") %>% 
+    group_by(cruiseid) %>% 
+    summarize(
+      cruise_ymd = min(cruise, na.rm=T),
+      date_beg = min(date, na.rm=T),
+      date_end = max(date, na.rm=T),
+      lon_min  = min(longitude, na.rm=T),
+      lon_max  = max(longitude, na.rm=T),
+      lat_min  = min(latitude, na.rm=T),
+      lat_max  = max(latitude, na.rm=T),
+      n_casts = n(),
+      .groups = "drop") %>% 
+    arrange(desc(cruiseid)) %>% 
+    filter(
+      date_beg >= as.Date(start_date),
+      date_end <= as.Date(end_date)
+    ) %>%
+    collect()
+}
+
+# /larvae_species ----
+#* Get alphabetic list of the scientific names of larvae species in the database
+#* @get /larvae_species
+#* @serializer csv
+function() {
+  
+  y<-tbl(con, "larvae_species") %>% 
+    distinct(scientific_name, common_name) %>%
+    arrange(scientific_name) %>% 
+    collect()
+}
+
+
+# /icthyo_variables ----
+#* Get list of variables from the icthyoplankton dataset.  Note that "catch_per_effort" is a derived variable not stored in the database.
+#* @get /icthyo_variables
+function() {
+  # TODO: show summary stats per variable:
+  #   date_beg, date_end, depth_min, depth_max, n_records
+  
+  y <- tbl(con, "net2cruise") %>% 
+   left_join(
+      tbl(con, "larvae_species"), 
+      by="netid") %>%
+    collect()
+  c(colnames(y),c('catch_per_effort'))
+}
+
+# /larvaedata ----
+# https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
+#* Get fish larvae  data
+#* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
+#* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
+#* @param species:str comma-separated list of scientific names (case-sensitive), or 'all'
+#* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
+#* @serializer csv
+#* @get /larvaedata
 function(
-    netid_min = 18149,
-    netid_max = 18155,
-    fields = c("netid", "cruise_ymd", "latitude", "longitude")) {
+    cruiseymd_max = 202301,
+    cruiseymd_min = 202001,
+    species='all',
+    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "townumber", "towtype", "netside",  "scientific_name", "catch_per_effort")) {
   
   # debug by setting a browser
   # browser()
   
   # method 1: direct database connection
+  catch <- FALSE
+  if("catch_per_effort" %in% fields){
+    fields <- union(fields, c("larvaecount", "towtype", "volsampled", "shf", "propsorted")) |>
+      setdiff("catch_per_effort")
+    catch <- TRUE
+  }
   y <- tbl(con, "net2cruise") |>
-    filter(
-      netid >= netid_min,
-      netid <= netid_max) |> 
-    select(all_of(fields)) |>  # https://dplyr.tidyverse.org/articles/programming.html
+    left_join(
+      tbl(con, "larvae_species"), 
+      by="netid") |>
+  filter(
+      as.integer(cruise_ymd) >= cruiseymd_min,
+      as.integer(cruise_ymd) <= cruiseymd_max) |>
+    select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
     collect()
+    if(species != 'all'){
+      sp_list <- trimws(unlist(strsplit(species,",")))
+      y <- y %>% filter(scientific_name %in% sp_list)
+    }
+    if(catch){
+        y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
+     } 
+  
   
   # method 2: postgres intermediary API
   # url <- "https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude"
@@ -207,17 +285,30 @@ function(
     glue("ST_Intersects(ST_GeomFromText('{aoi_wkt}', 4326), {tbl.geom})"),
     "TRUE")
 
-  q_where_date = case_when(
-    !is.null(date_beg) & !is.null(date_end) ~ glue2("date >= '{date_beg}' AND date <= '{date_end}'"),
-    is.null(date_beg) & !is.null(date_end) ~ glue2("date <= '{date_end}'"),
-    !is.null(date_beg) &  is.null(date_end) ~ glue2("date >= '{date_beg}'"),
-    TRUE ~ "TRUE")
+  fxn_where_date <- function(date_beg, date_end){
+    if (!is.null(date_beg) & !is.null(date_end))
+      return(glue2("date >= '{date_beg}' AND date <= '{date_end}'"))
+    if (is.null(date_beg)  & !is.null(date_end))
+      return(glue2("date <= '{date_end}'"))
+    if (!is.null(date_beg) &  is.null(date_end))
+      return(glue2("date >= '{date_beg}'"))
+    # else is.null(date_beg) & is.null(date_end)
+    "TRUE"
+  }
+  q_where_date = fxn_where_date(date_beg, date_end)
 
-  q_where_depth = case_when(
-    !is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"),
-     is.null(depth_m_min) & !is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m <= {depth_m_max}"),
-    !is.null(depth_m_min) &  is.null(depth_m_max) ~ glue2("{v$tbl}.depth_m >= {depth_m_min}"),
-    TRUE ~ "TRUE")
+
+  fxn_where_depth <- function(depth_m_min, depth_m_max){
+    if (!is.null(depth_m_min) & !is.null(depth_m_max))
+      return(glue2("{v$tbl}.depth_m >= {depth_m_min} AND {v$tbl}.depth_m <= {depth_m_max}"))
+    if (is.null(depth_m_min) & !is.null(depth_m_max))
+      return(glue2("{v$tbl}.depth_m <= {depth_m_max}"))
+    if (!is.null(depth_m_min) &  is.null(depth_m_max))
+      return(glue2("{v$tbl}.depth_m >= {depth_m_min}"))
+    # else is.null(depth_m_min) & is.null(depth_m_max)
+    "TRUE"
+  }
+  q_where_depth = fxn_where_depth(depth_m_min, depth_m_max)
   
   q_where_species_group = "TRUE"
   
@@ -392,28 +483,6 @@ function(
   d
 }
 
-
-# /cruises ----
-#* Get list of cruises with summary stats as CSV table for time (`date_beg`)
-#* @get /cruises
-#* @serializer csv
-function() {
-
-  # TODO: add ctd_casts indexes to db for: cruise_id, date, lon_dec, lat_dec
-  tbl(con, "ctd_casts") %>% 
-    group_by(cruiseid) %>% 
-    summarize(
-      date_beg = min(date, na.rm=T),
-      date_end = max(date, na.rm=T),
-      lon_min  = min(longitude, na.rm=T),
-      lon_max  = max(longitude, na.rm=T),
-      lat_min  = min(latitude, na.rm=T),
-      lat_max  = max(latitude, na.rm=T),
-      n_casts = n(),
-      .groups = "drop") %>% 
-    arrange(desc(cruiseid)) %>% 
-    collect()
-}
 
 # /raster ----
 #* Get raster of variable
