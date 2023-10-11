@@ -71,15 +71,19 @@ function(  start_date = "1949-01-01",
 #* @serializer csv
 function() {
   
-  y<-tbl(con, "larvae_species") %>% 
+  l <- tbl(con, "larvae_species") %>% 
     distinct(scientific_name, common_name) %>%
-    #arrange(scientific_name) %>% 
-    collect()
-  y1<-tbl(con, "egg_species") %>% 
+    collect() |> 
+    select(common_name, scientific_name)
+
+  s <- tbl(con, "egg_species") %>% 
     distinct(scientific_name, common_name) %>%
-    #arrange(scientific_name) %>% 
     collect()
-  y<-rbind(y,y1) %>% distinct() %>% arrange(scientific_name)
+
+  y <- bind_rows(l, s) |> 
+    distinct() |> 
+    arrange(scientific_name)
+  
   names(y) <- toupper(names(y))
   y
 }
