@@ -33,7 +33,7 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
 }
 
 # /cruises ----
-#* Get list of cruises with summary stats as CSV table for time (`date_beg`)
+#* Get list of cruises with summary stats as CSV table for period between start and end dates
 #* @param start_date:str starting date for search
 #* @param end_date:str end date for search
 #* @get /cruises
@@ -43,7 +43,7 @@ function(  start_date = "1949-01-01",
   
   # TODO: add ctd_casts indexes to db for: cruise_id, date, lon_dec, lat_dec
 
-  tbl(con, "ctd_casts") %>% 
+  y <- tbl(con, "ctd_casts") %>% 
     group_by(cruiseid) %>% 
     summarize(
       cruise_ymd = min(cruise, na.rm=T),
@@ -61,18 +61,27 @@ function(  start_date = "1949-01-01",
       date_end <= as.Date(end_date)
     ) %>%
     collect()
+  names(y) <- toupper(names(y))
+  y
 }
 
-# /larvae_species ----
+# /ichthyo_species ----
 #* Get alphabetic list of the scientific names of larvae species in the database
-#* @get /larvae_species
+#* @get /ichthyo_species
 #* @serializer csv
 function() {
   
   y<-tbl(con, "larvae_species") %>% 
     distinct(scientific_name, common_name) %>%
-    arrange(scientific_name) %>% 
+    #arrange(scientific_name) %>% 
     collect()
+  y1<-tbl(con, "egg_species") %>% 
+    distinct(scientific_name, common_name) %>%
+    #arrange(scientific_name) %>% 
+    collect()
+  y<-rbind(y,y1) %>% distinct() %>% arrange(scientific_name)
+  names(y) <- toupper(names(y))
+  y
 }
 
 
@@ -88,7 +97,8 @@ function() {
       tbl(con, "larvae_species"), 
       by="netid") %>%
     collect()
-  c(colnames(y),c('catch_per_effort'))
+  y1 <- tbl(con, "egg_species") %>% collect()
+  unique(c(colnames(y), colnames(y1), c('catch_per_effort')))
 }
 
 # /larvaedata ----
@@ -139,7 +149,7 @@ function(
   # req <- request(url)
   # y <- req_perform(req) |> 
   #   resp_body_json()
-  
+  names(y) <- toupper(names(y))
   y
 }
 
