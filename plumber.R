@@ -32,6 +32,24 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
   glue(x, .transformer = null_transformer(null_str), .envir = .envir, ...)
 }
 
+#/bottledata ----
+#* Get bottle data for specified ctd casts
+#* @param castcount:str comma separated list of one or more cast_counts (can be found in larvaedata)
+#* @get /bottledata
+#* @serializer csv
+function( castcount=30000){
+  castlist <- as.numeric(unlist(strsplit(castcount,",")))
+  fields=c("cruise","cast_count", "btl_cnt", "rptline", "rptsta", "date", "depth_m", "t_degc", "salinity", "o2ml_l","stheta")
+  y <-tbl(con, "ctd_casts") |>
+    inner_join(
+      tbl(con, "ctd_bottles"), 
+      by="cast_count") |>
+    filter(cast_count %in% castlist) %>% 
+    collect() |>
+    select(all_of(fields))
+  y
+}
+
 # /cruises ----
 #* Get list of cruises with summary stats as CSV table for period between start and end dates
 #* @param start_date:str starting date for search
@@ -66,7 +84,7 @@ function(  start_date = "1949-01-01",
 }
 
 # /ichthyo_species ----
-#* Get alphabetic list of the scientific names of larvae species in the database
+#* Get alphabetic list of the scientific names of egg larvae species in the database
 #* @get /ichthyo_species
 #* @serializer csv
 function() {
@@ -102,7 +120,7 @@ function() {
       by="netid") %>%
     collect()
   y1 <- tbl(con, "egg_species") %>% collect()
-  unique(c(colnames(y), colnames(y1), c('catch_per_effort')))
+  unique(c(colnames(y), colnames(y1), c('catch_per_effort'), c('cast_count')))
 }
 
 # /larvaedata ----
@@ -118,7 +136,7 @@ function(
     cruiseymd_max = 202301,
     cruiseymd_min = 202001,
     species='all',
-    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "townumber", "towtype", "netside",  "scientific_name", "catch_per_effort")) {
+    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "cast_count", "townumber", "towtype", "netside",  "scientific_name", "catch_per_effort")) {
   
   # debug by setting a browser
   # browser()
@@ -133,6 +151,9 @@ function(
   y <- tbl(con, "net2cruise") |>
     left_join(
       tbl(con, "larvae_species"), 
+      by="netid") |>
+    left_join(
+      tbl(con, "net2ctdcast"), 
       by="netid") |>
   filter(
       as.integer(cruise_ymd) >= cruiseymd_min,
