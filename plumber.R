@@ -32,6 +32,9 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
   glue(x, .transformer = null_transformer(null_str), .envir = .envir, ...)
 }
 
+#* @apiTitle CalCOFI Custom API
+#* @apiDescription Custom functions for data retrieval from the CalCOFI database made available online through this language-agnostic application programming interface (API).
+
 #/bottledata ----
 #* Get bottle data for specified ctd casts
 #* @param castcount:str comma separated list of one or more cast_counts (can be found in larvaedata)
@@ -84,18 +87,18 @@ function(  start_date = "1949-01-01",
 }
 
 # /ichthyo_species ----
-#* Get alphabetic list of the scientific names of egg larvae species in the database
+#* Get alphabetic list of the scientific names of egg and larvae species in the database
 #* @get /ichthyo_species
 #* @serializer csv
 function() {
   
   l <- tbl(con, "larvae_species") %>% 
-    distinct(scientific_name, common_name) %>%
+    distinct(scientific_name, common_name, itis_tsn) %>%
     collect() |> 
-    select(common_name, scientific_name)
+    select(common_name, scientific_name, itis_tsn)
 
   s <- tbl(con, "egg_species") %>% 
-    distinct(scientific_name, common_name) %>%
+    distinct(scientific_name, common_name, itis_tsn) %>%
     collect()
 
   y <- bind_rows(l, s) |> 
@@ -123,9 +126,58 @@ function() {
   unique(c(colnames(y), colnames(y1), c('catch_per_effort'), c('cast_count')))
 }
 
+# /itis_larvaedata ----
+# https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
+#* Get fish larvae  data by ITIS id
+#* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
+#* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
+#* @param species:str comma-separated list of ITIS ids, or 'all'
+#* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
+#* @serializer csv
+#* @get /itis_larvaedata
+function(
+    cruiseymd_max = 202301,
+    cruiseymd_min = 202001,
+    species='all',
+    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "cast_count", "townumber", "towtype", "netside",  "scientific_name", "itis_tsn", "catch_per_effort")) {
+  
+  # debug by setting a browser
+  # browser()
+  
+  # method 1: direct database connection
+  catch <- FALSE
+  if("catch_per_effort" %in% fields){
+    fields <- union(fields, c("larvaecount", "towtype", "volsampled", "shf", "propsorted")) |>
+      setdiff("catch_per_effort")
+    catch <- TRUE
+  }
+  y <- tbl(con, "net2cruise") |>
+    left_join(
+      tbl(con, "larvae_species"), 
+      by="netid") |>
+    left_join(
+      tbl(con, "net2ctdcast"), 
+      by="netid") |>
+    filter(
+      as.integer(cruise_ymd) >= cruiseymd_min,
+      as.integer(cruise_ymd) <= cruiseymd_max) |>
+    select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
+    collect()
+  if(species != 'all'){
+    sp_list <- trimws(unlist(strsplit(species,",")))
+    y <- y %>% filter(itis_tsn %in% sp_list)
+  }
+  if(catch){
+    y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
+  } 
+
+  names(y) <- toupper(names(y))
+  y
+}
+
 # /larvaedata ----
 # https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
-#* Get fish larvae  data
+#* Get fish larvae  data by scientific name
 #* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
 #* @param species:str comma-separated list of scientific names (case-sensitive), or 'all'
@@ -744,25 +796,25 @@ function(req, res) {
 
 # /OLD... ----
 
-#* Echo back the input
-#* @param msg The message to echo
-#* @get /echo
-function(msg="") {
-  list(msg = paste0("The message is: '", msg, "'"))
-}
-
-#* Plot a histogram
-#* @serializer png
-#* @get /plot
-function() {
-  rand <- rnorm(100)
-  hist(rand)
-}
-
-#* Return the sum of two numbers
-#* @param a The first number to add
-#* @param b The second number to add
-#* @post /sum
-function(a, b) {
-  as.numeric(a) + as.numeric(b)
-}
+# #* Echo back the input
+# #* @param msg The message to echo
+# #* @get /echo
+# function(msg="") {
+#   list(msg = paste0("The message is: '", msg, "'"))
+# }
+# 
+# #* Plot a histogram
+# #* @serializer png
+# #* @get /plot
+# function() {
+#   rand <- rnorm(100)
+#   hist(rand)
+# }
+# 
+# #* Return the sum of two numbers
+# #* @param a The first number to add
+# #* @param b The second number to add
+# #* @post /sum
+# function(a, b) {
+#   as.numeric(a) + as.numeric(b)
+# }
