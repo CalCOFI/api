@@ -5,6 +5,10 @@ if (!require("librarian")){
   install.packages("librarian")
   library(librarian)
 }
+if(!require("hash")){
+  install.packages("hash")
+  library(hash)
+}
 librarian::shelf(
   DBI, dbplyr, digest, dplyr, glue, gstat, here, httr2, lubridate, 
   plumber, raster, RPostgres, sf, stringr, tidyr)
@@ -19,6 +23,18 @@ dir_cache <- "/tmp"
 
 # database ----
 source(glue("{dir_apps}/libs/db.R"))
+
+# dictionary of ichthyo variables and descriptions
+keys=c("netid","cruise_id","cruise_ymd","ship","line","stationid","station","latitude","longitude","orderocc",
+       "gebco_depth","netside","townumber","towtype","volsampled","shf","propsorted","starttime",
+       "scientific_name","common_name", "larvaecount","itis_tsn","catch_per_effort",
+       "cast_count")
+vals=c("Unique net ID", "unique cruise id", "YYYMM", "2-character code", "CalCOFI line number", "Unique station id", 
+       "CalCOFI station number", "Decimal degrees", "Decimal degrees", "Order Occupied", "Bottom depth from GEBCO bathymetry (m)", 
+       "P(ort) or S(tarboard)", "Tow number", "2-character code", "Volume sampled (m^3)", "Standard haul factor",
+       "Proportion of sample sorted", "Net start time ", "", " ", "Raw Count", "Taxonomic Serial Number", 
+       "Catch/m^3 if towtype=MT, catch/10m^2 otherwise", "CTD cast count")
+fieldhash=hash(keys,vals)
 
 # helper functions ----
 glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
@@ -42,7 +58,7 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
 #* @serializer csv
 function( castcount=30000){
   castlist <- as.numeric(unlist(strsplit(castcount,",")))
-  fields=c("cruise","cast_count", "btl_cnt", "rptline", "rptsta", "date", "depth_m", "t_degc", "salinity", "o2ml_l","stheta")
+  fields=c("cruise","cast_count", "btl_cnt", "rptline", "rptsta", "date", "depth_m", "t_degc", "salinity","stheta",'o2ml_l', 'o2sat', 'chlora', 'po4um', 'sio3um', 'no2um', 'no3um')
   y <-tbl(con, "ctd_casts") |>
     inner_join(
       tbl(con, "ctd_bottles"), 
@@ -87,7 +103,7 @@ function(  start_date = "1949-01-01",
 }
 
 # /ichthyo_species ----
-#* Get alphabetic list of the scientific names of egg and larvae species in the database
+#* Get alphabetic list of the scientific names, common names, and ITIS ids of all egg and larvae species in the database
 #* @get /ichthyo_species
 #* @serializer csv
 function() {
@@ -110,9 +126,9 @@ function() {
 }
 
 
-# /icthyo_variables ----
-#* Get list of variables from the icthyoplankton dataset.  Note that "catch_per_effort" is a derived variable not stored in the database.
-#* @get /icthyo_variables
+# /ichthyo_variables ----
+#* Get list of variables from the icthyoplankton dataset, along with short descriptions and units where applicable.  Note that "catch_per_effort" is a derived variable not stored in the database.
+#* @get /ichthyo_variables
 function() {
   # TODO: show summary stats per variable:
   #   date_beg, date_end, depth_min, depth_max, n_records
@@ -123,29 +139,35 @@ function() {
       by="netid") %>%
     collect()
   y1 <- tbl(con, "egg_species") %>% collect()
-  unique(c(colnames(y), colnames(y1), c('catch_per_effort'), c('cast_count')))
+  vars <- unique(c(colnames(y), colnames(y1), c('catch_per_effort'), c('cast_count')))
+  vars <- vars[! vars %in% c("geom","spccode")]  # Don't really need these, remove them
+  vars1=c()
+  for (x in vars){ vars1 <- append(vars1,paste(x,fieldhash[[x]],sep=": "))}
+  vars1
 }
 
 # /itis_larvaedata ----
 # https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
-#* Get fish larvae  data by ITIS id
+#* Get fish larvae  data by ITIS id. For information about individual variables, see the ichthyo_variables function above.
 #* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
-#* @param species:str comma-separated list of ITIS ids, or 'all'
+#* @param ITISid:str comma-separated list of ITIS ids, or 'all'
+#* @param exact_match:boolean if false, return any species whose full taxonomy contains given ITIS id (if exact species is known, set to True; to search by higher taxa, set to False).
 #* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
 #* @serializer csv
 #* @get /itis_larvaedata
 function(
     cruiseymd_max = 202301,
     cruiseymd_min = 202001,
-    species='all',
-    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "cast_count", "townumber", "towtype", "netside",  "scientific_name", "itis_tsn", "catch_per_effort")) {
-  
+    ITISid='all',
+    exact_match=TRUE,
+    fields = c("netid", "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "path","catch_per_effort")) {
   # debug by setting a browser
   # browser()
   
   # method 1: direct database connection
   catch <- FALSE
+
   if("catch_per_effort" %in% fields){
     fields <- union(fields, c("larvaecount", "towtype", "volsampled", "shf", "propsorted")) |>
       setdiff("catch_per_effort")
@@ -156,21 +178,39 @@ function(
       tbl(con, "larvae_species"), 
       by="netid") |>
     left_join(
-      tbl(con, "net2ctdcast"), 
+      tbl(con, "newnet2ctdcast"), 
       by="netid") |>
+    left_join(
+      tbl(con, "taxa_hierarchy"),
+      by=c("itis_tsn"="tsn", "scientific_name")
+    ) |>
     filter(
       as.integer(cruise_ymd) >= cruiseymd_min,
       as.integer(cruise_ymd) <= cruiseymd_max) |>
     select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
     collect()
-  if(species != 'all'){
-    sp_list <- trimws(unlist(strsplit(species,",")))
-    y <- y %>% filter(itis_tsn %in% sp_list)
+  if(ITISid != 'all'){
+    #sp_list <- trimws(unlist(strsplit(ITISid,",")))
+    if(exact_match){
+      sp_list <- trimws(unlist(strsplit(ITISid,",")))
+      y <- y %>% filter(itis_tsn %in% sp_list)
+    } else{
+      sp_list=gsub(',', '|', ITISid)
+      y <- y %>% filter(grepl(sp_list,path))
+    }
   }
   if(catch){
     y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
   } 
 
+# Relabel some columns to be more informative
+  colnames(y)[colnames(y)=='ship']='ship code'
+  colnames(y)[colnames(y)=='path']='taxon path'
+  if(catch){
+    colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
+    colnames(y)[colnames(y)=='propsorted']='proportion sorted'
+    #colnames(y)[colnames[y]=="catch_per_effort"]=if_else(towtype=="MT", "catch per effort (catch/m^3)", "catch per effort (catch/10m^2)")
+  }
   names(y) <- toupper(names(y))
   y
 }
@@ -188,7 +228,7 @@ function(
     cruiseymd_max = 202301,
     cruiseymd_min = 202001,
     species='all',
-    fields = c("netid", "cruise_ymd", "line", "station", "latitude", "longitude", "orderocc", "cast_count", "townumber", "towtype", "netside",  "scientific_name", "catch_per_effort")) {
+    fields = c("netid", "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "catch_per_effort")) {
   
   # debug by setting a browser
   # browser()
@@ -205,7 +245,7 @@ function(
       tbl(con, "larvae_species"), 
       by="netid") |>
     left_join(
-      tbl(con, "net2ctdcast"), 
+      tbl(con, "newnet2ctdcast"), 
       by="netid") |>
   filter(
       as.integer(cruise_ymd) >= cruiseymd_min,
@@ -226,6 +266,15 @@ function(
   # req <- request(url)
   # y <- req_perform(req) |> 
   #   resp_body_json()
+  
+  # Relabel some columns to be more informative
+  colnames(y)[colnames(y)=='ship']='ship code'
+  if(catch){
+    colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
+    colnames(y)[colnames(y)=='propsorted']='proportion sorted'
+    #colnames(y)[colnames[y]=="catch_per_effort"]=if_else(towtype=="MT", "catch per effort (catch/m^3)", "catch per effort (catch/10m^2)")
+  }
+  
   names(y) <- toupper(names(y))
   y
 }
