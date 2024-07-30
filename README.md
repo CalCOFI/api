@@ -4,6 +4,16 @@ Test application programming interface (API)
 
 ## Run the API
 
+### Git pane missing?
+
+If so, in Terminal run `git status` to provide command you need to run:
+
+```bash
+git config --global --add safe.directory /share/github/api
+```
+
+Then open a different RStudio project (upper right), and this one again to return  the Git pane in RStudio.
+
 ### start
 
 Run the API in the background from server's RStudio Terminal:
