@@ -146,34 +146,40 @@ function() {
   vars1
 }
 
-# /itis_larvaedata ----
+# /itis_ichthyodata ----
 # https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
-#* Get fish larvae  data by ITIS id. For information about individual variables, see the ichthyo_variables function above.
+#* Get fish larvae and egg data by ITIS id. For information about individual variables, see the ichthyo_variables function above.
 #* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
 #* @param ITISid:str comma-separated list of ITIS ids, or 'all'
+#* @param stage:str 'egg', 'larvae' or 'both'
 #* @param exact_match:boolean if false, return any species whose full taxonomy contains given ITIS id (if exact species is known, set to True; to search by higher taxa, set to False).
 #* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
 #* @serializer csv
-#* @get /itis_larvaedata
+#* @get /itis_ichthyodata
 function(
     cruiseymd_max = 202301,
     cruiseymd_min = 202001,
     ITISid='all',
+    stage='both',
     exact_match=TRUE,
-    fields = c("netid", "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "path","catch_per_effort")) {
-  # debug by setting a browser
+    fields = c("netid", "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "path","catch_per_effort"))
+    {
+      # debug by setting a browser
   # browser()
   
   # method 1: direct database connection
   catch <- FALSE
-
+  
   if("catch_per_effort" %in% fields){
     fields <- union(fields, c("larvaecount", "towtype", "volsampled", "shf", "propsorted")) |>
       setdiff("catch_per_effort")
     catch <- TRUE
   }
-  y <- tbl(con, "net2cruise") |>
+
+  if (stage %in% c('larvae','both')){
+  # First, get larvae data
+  y0 <- tbl(con, "net2cruise") |>
     left_join(
       tbl(con, "larvae_species"), 
       by="netid") |>
@@ -193,17 +199,63 @@ function(
     #sp_list <- trimws(unlist(strsplit(ITISid,",")))
     if(exact_match){
       sp_list <- trimws(unlist(strsplit(ITISid,",")))
-      y <- y %>% filter(itis_tsn %in% sp_list)
+      y0 <- y0 %>% filter(itis_tsn %in% sp_list)
     } else{
       sp_list=gsub(',', '|', ITISid)
-      y <- y %>% filter(grepl(sp_list,path))
+      y0 <- y0 %>% filter(grepl(sp_list,path))
     }
   }
+  colnames(y0)[colnames(y0)=='larvaecount']='count'
+  y0 <- y0 %>% mutate(stage='LARVAE')
+  }
+  if(stage %in% c('egg','both')){
+  # Now get egg data
+  fields <- union(fields, c("eggcount")) |> setdiff("larvaecount")
+  y1 <- tbl(con, "net2cruise") |>
+    left_join(
+      tbl(con, "egg_species"), 
+      by="netid") |>
+    left_join(
+      tbl(con, "newnet2ctdcast"), 
+      by="netid") |>
+    left_join(
+      tbl(con, "taxa_hierarchy"),
+      by=c("itis_tsn"="tsn", "scientific_name")
+    ) |>
+    filter(
+      as.integer(cruise_ymd) >= cruiseymd_min,
+      as.integer(cruise_ymd) <= cruiseymd_max) |>
+    select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
+    collect()
+  if(ITISid != 'all'){
+    #sp_list <- trimws(unlist(strsplit(ITISid,",")))
+    if(exact_match){
+      sp_list <- trimws(unlist(strsplit(ITISid,",")))
+      y1 <- y1 %>% filter(itis_tsn %in% sp_list)
+    } else{
+      sp_list=gsub(',', '|', ITISid)
+      y1 <- y1 %>% filter(grepl(sp_list,path))
+    }
+  }
+  colnames(y1)[colnames(y1)=='eggcount']='count'
+  y1 <- y1 %>% mutate(stage='EGG')
+  }
+  #Now combine the two tables if needed
+  if(stage=='both'){
+    y <- bind_rows(y0, y1) |> 
+      distinct() %>%
+      arrange(stage, scientific_name)
+  } else if(stage=='larvae') {
+      y <- y0
+  } else{
+      y <- y1
+  }
+    
   if(catch){
-    y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
+    y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*count/volsampled, shf*count/propsorted), .before=count)
   } 
-
-# Relabel some columns to be more informative
+  
+  # Relabel some columns to be more informative
   colnames(y)[colnames(y)=='ship']='ship code'
   colnames(y)[colnames(y)=='path']='taxon path'
   if(catch){
@@ -215,19 +267,22 @@ function(
   y
 }
 
-# /larvaedata ----
+
+# /ichthyodata ----
 # https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude
-#* Get fish larvae  data by scientific name
+#* Get fish egg and larvae  data by scientific name
 #* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
 #* @param species:str comma-separated list of scientific names (case-sensitive), or 'all'
+#* @param stage:str 'egg', 'larvae' or 'both'
 #* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
 #* @serializer csv
-#* @get /larvaedata
+#* @get /ichthyodata
 function(
     cruiseymd_max = 202301,
     cruiseymd_min = 202001,
     species='all',
+    stage='both',
     fields = c("netid", "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "catch_per_effort")) {
   
   # debug by setting a browser
@@ -240,7 +295,9 @@ function(
       setdiff("catch_per_effort")
     catch <- TRUE
   }
-  y <- tbl(con, "net2cruise") |>
+  if (stage %in% c('larvae','both')){
+    # get larvae data
+  y0 <- tbl(con, "net2cruise") |>
     left_join(
       tbl(con, "larvae_species"), 
       by="netid") |>
@@ -254,25 +311,55 @@ function(
     collect()
     if(species != 'all'){
       sp_list <- trimws(unlist(strsplit(species,",")))
-      y <- y %>% filter(scientific_name %in% sp_list)
+      y0 <- y0 %>% filter(scientific_name %in% sp_list)
     }
     if(catch){
-        y <- y %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
-     } 
+        y0 <- y0 %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
+    } 
   
-  
-  # method 2: postgres intermediary API
-  # url <- "https://rest.calcofi.io/net2cruise?netid=gt.18149&netid=lt.18155&select=netid,cruise_ymd,latitude,longitude"
-  # req <- request(url)
-  # y <- req_perform(req) |> 
-  #   resp_body_json()
-  
+  colnames(y0)[colnames(y0)=='larvaecount']='count'
+  y0 <- y0 %>% mutate(stage='LARVAE')
+  }
+  if(stage %in% c('egg','both')){
+    # Now get egg data
+    fields <- union(fields, c("eggcount")) |> setdiff("larvaecount")
+    y1 <- tbl(con, "net2cruise") |>
+      left_join(
+        tbl(con, "egg_species"), 
+        by="netid") |>
+      left_join(
+        tbl(con, "newnet2ctdcast"), 
+        by="netid") |>
+      filter(
+        as.integer(cruise_ymd) >= cruiseymd_min,
+        as.integer(cruise_ymd) <= cruiseymd_max) |>
+      select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
+      collect()
+    if(species != 'all'){
+      sp_list <- trimws(unlist(strsplit(species,",")))
+      y1 <- y1 %>% filter(scientific_name %in% sp_list)
+    }
+    if(catch){
+      y1 <- y1 %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
+    } 
+    colnames(y1)[colnames(y1)=='eggcount']='count'
+    y1 <- y1 %>% mutate(stage='EGG')
+  }
+  #Now combine the two tables if needed
+  if(stage=='both'){
+    y <- bind_rows(y0, y1) |> 
+      distinct() %>%
+      arrange(stage, scientific_name)
+  } else if(stage=='larvae') {
+    y <- y0
+  } else{
+    y <- y1
+  }
   # Relabel some columns to be more informative
   colnames(y)[colnames(y)=='ship']='ship code'
   if(catch){
     colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
     colnames(y)[colnames(y)=='propsorted']='proportion sorted'
-    #colnames(y)[colnames[y]=="catch_per_effort"]=if_else(towtype=="MT", "catch per effort (catch/m^3)", "catch per effort (catch/10m^2)")
   }
   
   names(y) <- toupper(names(y))
