@@ -913,6 +913,65 @@ function(cruise_id, sta_line, variable){
   d
 }
 
+# /db_tables ----
+#* Get database tables with description
+#* @get /db_tables
+#* @serializer csv
+function(){
+  dbGetQuery(
+    con, "
+      SELECT 
+          n.nspname AS schema,
+          CASE
+            WHEN c.relkind::varchar = 'r' THEN 'table'
+            WHEN c.relkind::varchar = 'v' THEN 'view'
+            WHEN c.relkind::varchar = 'm' THEN 'materialized view'
+            ELSE c.relkind::varchar
+          END AS table_type,
+          c.relname       AS table,
+          obj_description(c.oid) AS table_description
+        FROM
+          pg_catalog.pg_class c
+          LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE
+          n.nspname NOT IN ('information_schema','pg_catalog') AND
+          c.relkind IN ('r','v','m')    -- r = ordinary table, i = index, S = sequence, t = TOAST table, v = view, m = materialized view, c = composite type, f = foreign table, p = partitioned table, I = partitioned index
+        ORDER BY n.nspname, c.relname") |> 
+    tibble()
+}
+
+# /db_columns ----
+#* Get database columns with description
+#* @get /db_columns
+#* @serializer csv
+function(){
+  dbGetQuery(
+    con, "
+      SELECT 
+          n.nspname AS schema,
+          CASE
+            WHEN c.relkind::varchar = 'r' THEN 'table'
+            WHEN c.relkind::varchar = 'v' THEN 'view'
+            WHEN c.relkind::varchar = 'm' THEN 'materialized view'
+            ELSE c.relkind::varchar
+          END AS table_type,
+          c.relname       AS table,
+          a.attname       AS column,
+          format_type(a.atttypid, a.atttypmod) AS column_type,
+          col_description(c.oid, a.attnum)     AS column_description
+        FROM
+          pg_catalog.pg_attribute a    -- https://www.postgresql.org/docs/current/catalog-pg-attribute.html
+          LEFT JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+          LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE
+          n.nspname NOT IN ('information_schema','pg_catalog') AND
+          c.relkind IN ('r','v','m') AND    -- r = ordinary table, i = index, S = sequence, t = TOAST table, v = view, m = materialized view, c = composite type, f = foreign table, p = partitioned table, I = partitioned index
+          a.attnum > 0 AND                  -- Ordinary columns are numbered from 1 up. System columns, such as ctid, have (arbitrary) negative numbers.
+          atttypid > 0                      -- zero for a dropped column
+        ORDER BY n.nspname, c.relname, a.attname") |> 
+    tibble()
+}
+
 # / home redirect ----
 #* redirect to the swagger interface 
 #* @get /
