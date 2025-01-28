@@ -66,6 +66,7 @@ function( castcount=30000){
     filter(cast_count %in% castlist) %>% 
     collect() |>
     select(all_of(fields))
+  names(y) <- toupper(names(y))
   y
 }
 
@@ -125,6 +126,46 @@ function() {
   y
 }
 
+# /zooplankton biomass ----
+#* Return small plankton and total plankton biomass for the specified cruise interval.
+#* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
+#* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
+#* @serializer csv
+#* @get /zooplankton_biomass
+function(
+  cruiseymd_max = 202301,
+  cruiseymd_min = 202001)
+{
+  fields <- c("cruise_ymd","netid", "towid", "netside", "shf", "volsampled", "propsorted", "smallplankton", "totalplankton")
+  y<-tbl(con, "net_uuids") %>%
+    left_join(
+      tbl(con,'uunet2cruise',
+          by="netid")
+    ) |>
+    filter(
+      as.integer(cruise_ymd) >= cruiseymd_min,
+      as.integer(cruise_ymd) <= cruiseymd_max
+    ) |>
+    select(all_of(fields)) |>
+    collect()
+  y <- y %>% mutate(sppervol=1000*smallplankton/volsampled, .after=smallplankton)
+  y <- y %>% mutate(tppervol=1000*totalplankton/volsampled, .after=totalplankton)
+  y[,'sppervol']=round(y[,'sppervol'],2)
+  y[,'tppervol']=round(y[,'tppervol'],2)
+  colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
+  colnames(y)[colnames(y)=='propsorted']='proportion sorted'
+  colnames(y)[colnames(y)=='shf']='haul factor'
+  colnames(y)[colnames(y)=='smallplankton']='SP: small plankton (ml)'
+  colnames(y)[colnames(y)=='sppervol']='SP/volume (ml/1000 m^3)'
+  colnames(y)[colnames(y)=='totalplankton']='TP: total plankton (ml)'
+  colnames(y)[colnames(y)=='tppervol']='TP/volume (ml/1000 m^3)'
+  
+  
+  names(y) <- toupper(names(y))
+  
+   y
+}
+
 
 # /ichthyo_variables ----
 #* Get list of variables from the icthyoplankton dataset, along with short descriptions and units where applicable.  Note that "catch_per_effort" is a derived variable not stored in the database.
@@ -171,32 +212,31 @@ function(
   # method 1: direct database connection
   catch <- FALSE
   #Some fields appear in both egg and larvae table and need to be differentiated
-  dupe_fields=intersect(fields,c("gebco_depth", "sppcode", "scientific_name", "common_name", "itis_tsn"))
+  dupe_fields=intersect(fields,c("gebco_depth", "sppcode", "common_name", "itis_tsn"))
   larvae_dupes=paste(dupe_fields,"x", sep=".")
   egg_dupes=paste(dupe_fields,"y", sep=".")
   if("catch_per_effort" %in% fields){
-    fields <- union(fields, c("larvaecount","eggcount", "towtype", "volsampled", "shf", "propsorted")) |>
+    fields <- union(fields, c("netid", "larvaecount","eggcount", "towtype", "volsampled", "shf", "propsorted")) |>
       setdiff("catch_per_effort") |> setdiff(dupe_fields) 
     fields <- c(fields,larvae_dupes,egg_dupes)
     catch <- TRUE
   }
   
-  if (stage %in% c('larvae','both')){
   # First, get larvae data
-  y0 <- tbl(con, "uunet2cruise") |>
-    left_join(
-      tbl(con, "larvae_species_uuids"), 
-      by="netid") |>
-    left_join(
-      tbl(con,'egg_species_uuids'),
-      by="netid") |>
+  Y2 <- tbl(con, "uunet2cruise") |>
     left_join(
       tbl(con, "uunet2ctd"), 
+      by="netid")
+  
+  Y1 <- tbl(con, "larvae_species_uuids") |>
+    full_join(
+      tbl(con,'egg_species_uuids'),
+      by <- join_by(netid, scientific_name))
+
+   y0 <- left_join(
+      Y2,Y1,
       by="netid") |>
-    # left_join(
-    #   tbl(con, "taxa_hierarchy"),
-    #   by=c("itis_tsn"="tsn", "scientific_name")
-    # ) |>
+    
     filter(
       as.integer(cruise_ymd) >= cruiseymd_min,
       as.integer(cruise_ymd) <= cruiseymd_max) |>
@@ -212,53 +252,8 @@ function(
       y0 <- y0 %>% filter(grepl(sp_list,path))
     }
   }
-  #colnames(y0)[colnames(y0)=='larvaecount']='count'
-  #y0 <- y0 %>% mutate(stage='LARVAE')
-  }
-  # if(stage %in% c('egg','both')){
-  # # Now get egg data
-  # fields <- union(fields, c("eggcount")) |> setdiff("larvaecount")
-  # y1 <- tbl(con, "uunet2cruise") |>
-  #   left_join(
-  #     tbl(con, "egg_species_uuids"), 
-  #     by="netid") |>
-  #   left_join(
-  #     tbl(con, "uunet2ctd"), # was newnet2ctdcast
-  #     by="netid") |>
-  #   left_join(
-  #     tbl(con, "taxa_hierarchy"),
-  #     by=c("itis_tsn"="tsn", "scientific_name")
-  #   ) |>
-  #   filter(
-  #     as.integer(cruise_ymd) >= cruiseymd_min,
-  #     as.integer(cruise_ymd) <= cruiseymd_max) |>
-  #   select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
-  #   collect()
-  # if(ITISid != 'all'){
-  #   #sp_list <- trimws(unlist(strsplit(ITISid,",")))
-  #   if(exact_match){
-  #     sp_list <- trimws(unlist(strsplit(ITISid,",")))
-  #     y1 <- y1 %>% filter(itis_tsn %in% sp_list)
-  #   } else{
-  #     sp_list=gsub(',', '|', ITISid)
-  #     y1 <- y1 %>% filter(grepl(sp_list,path))
-  #   }
-  # }
-  # colnames(y1)[colnames(y1)=='eggcount']='count'
-  # y1 <- y1 %>% mutate(stage='EGG')
-  # }
-  #Now combine the two tables if needed
-  # if(stage=='both'){
-  #   y <- bind_rows(y0, y1) |> 
-  #     distinct() %>%
-  #     arrange(stage, scientific_name)
-  # } else if(stage=='larvae') {
-  #     y <- y0
-  # } else{
-  #     y <- y1
-  # }
-  #   
-  y <- y0
+  
+  y <- y0 %>% arrange(netid)
   if(catch){
     y <- y %>% mutate(lcatch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
     y <- y %>% mutate(ecatch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
