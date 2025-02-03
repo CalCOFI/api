@@ -265,6 +265,8 @@ function(
   if(catch){
     colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
     colnames(y)[colnames(y)=='propsorted']='proportion sorted'
+    colnames(y)[colnames(y)=='itis_tsn.x']='larvae ITIS ID'
+    colnames(y)[colnames(y)=='itis_tsn.y']='egg ITIS ID'
     #colnames(y)[colnames[y]=="catch_per_effort"]=if_else(towtype=="MT", "catch per effort (catch/m^3)", "catch per effort (catch/10m^2)")
   }
   names(y) <- toupper(names(y))
@@ -294,76 +296,57 @@ function(
   
   # method 1: direct database connection
   catch <- FALSE
+  #Some fields appear in both egg and larvae table and need to be differentiated
+  dupe_fields=intersect(fields,c("gebco_depth", "sppcode", "common_name", "itis_tsn"))
+  larvae_dupes=paste(dupe_fields,"x", sep=".")
+  egg_dupes=paste(dupe_fields,"y", sep=".")
   if("catch_per_effort" %in% fields){
-    fields <- union(fields, c("larvaecount", "towtype", "volsampled", "shf", "propsorted")) |>
-      setdiff("catch_per_effort")
+    fields <- union(fields, c("netid", "larvaecount", "eggcount", "towtype", "volsampled", "shf", "propsorted")) |>
+      setdiff("catch_per_effort") |> setdiff(dupe_fields) 
+    fields <- c(fields,larvae_dupes,egg_dupes)
+    print(fields)
     catch <- TRUE
   }
-  if (stage %in% c('larvae','both')){
-    # get larvae data
-  y0 <- tbl(con, "uunet2cruise") |>
-    left_join(
-      tbl(con, "larvae_species_uuids"), 
-      by="netid") |>
+  
+  # First, get larvae data
+  Y2 <- tbl(con, "uunet2cruise") |>
     left_join(
       tbl(con, "uunet2ctd"), 
-      by="netid") |>
-  filter(
+      by="netid")
+  
+  Y1 <- tbl(con, "larvae_species_uuids") |>
+    full_join(
+      tbl(con,'egg_species_uuids'),
+      by <- join_by(netid, scientific_name))
+  
+  y0 <- left_join(
+    Y2,Y1,
+    by="netid") |>
+    
+    filter(
       as.integer(cruise_ymd) >= cruiseymd_min,
       as.integer(cruise_ymd) <= cruiseymd_max) |>
     select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
     collect()
-    if(species != 'all'){
-      sp_list <- trimws(unlist(strsplit(species,",")))
-      y0 <- y0 %>% filter(scientific_name %in% sp_list)
-    }
-    if(catch){
-        y0 <- y0 %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
-    } 
+    
+  if(species != 'all'){
+    sp_list <- trimws(unlist(strsplit(species,",")))
+    y0 <- y0 %>% filter(scientific_name %in% sp_list)
+  }
   
-  colnames(y0)[colnames(y0)=='larvaecount']='count'
-  y0 <- y0 %>% mutate(stage='LARVAE')
-  }
-  if(stage %in% c('egg','both')){
-    # Now get egg data
-    fields <- union(fields, c("eggcount")) |> setdiff("larvaecount")
-    y1 <- tbl(con, "uunet2cruise") |>
-      left_join(
-        tbl(con, "egg_species_uuids"), 
-        by="netid") |>
-      left_join(
-        tbl(con, "uunet2ctd"), 
-        by="netid") |>
-      filter(
-        as.integer(cruise_ymd) >= cruiseymd_min,
-        as.integer(cruise_ymd) <= cruiseymd_max) |>
-      select(all_of(fields)) |># https://dplyr.tidyverse.org/articles/programming.html
-      collect()
-    if(species != 'all'){
-      sp_list <- trimws(unlist(strsplit(species,",")))
-      y1 <- y1 %>% filter(scientific_name %in% sp_list)
-    }
-    if(catch){
-      y1 <- y1 %>% mutate(catch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
-    } 
-    colnames(y1)[colnames(y1)=='eggcount']='count'
-    y1 <- y1 %>% mutate(stage='EGG')
-  }
-  #Now combine the two tables if needed
-  if(stage=='both'){
-    y <- bind_rows(y0, y1) |> 
-      distinct() %>%
-      arrange(stage, scientific_name)
-  } else if(stage=='larvae') {
-    y <- y0
-  } else{
-    y <- y1
-  }
+  y <- y0 %>% arrange(netid)
+  if(catch){
+    y <- y %>% mutate(lcatch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
+    y <- y %>% mutate(ecatch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
+  } 
+  
   # Relabel some columns to be more informative
   colnames(y)[colnames(y)=='ship']='ship code'
   if(catch){
     colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
     colnames(y)[colnames(y)=='propsorted']='proportion sorted'
+    colnames(y)[colnames(y)=='itis_tsn.x']='larvae ITIS ID'
+    colnames(y)[colnames(y)=='itis_tsn.y']='egg ITIS ID'
   }
   
   names(y) <- toupper(names(y))
