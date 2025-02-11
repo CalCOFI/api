@@ -48,8 +48,43 @@ glue2 <- function(x, null_str="", .envir = sys.frame(-3), ...){
   glue(x, .transformer = null_transformer(null_str), .envir = .envir, ...)
 }
 
+cast_filter <- function(y0, flag){
+  if(flag){
+    y<-filter(y0,!is.null(cast_count))
+  }
+  else{
+    y<-y0
+  }
+  y
+}
+
 #* @apiTitle CalCOFI Custom API
 #* @apiDescription Custom functions for data retrieval from the CalCOFI database made available online through this language-agnostic application programming interface (API).
+
+#/castdata ----
+#* Get ctd upcast and/or downcast data
+#* @param start_date:str starting date for search
+#* @param end_date:str end date for search
+#* @param cast_type:str "up" for upcast, "down" for downcast
+#* @param has_cast_count:boolean If True, return only casts where cast_count is not null
+#* @get /castdata
+#* @serializer csv
+function( start_date = "2018-01-01",
+          end_date = Sys.Date() |> format("%Y-%m-%d"),
+          cast_type = "up",
+          has_cast_count=TRUE) {
+  tbl_name = if_else(cast_type=="up",'ctd_upcasts_w_castcount','ctd_downcasts_w_castcount')
+  y <-tbl(con, tbl_name) |>
+    filter(
+    date_time_utc >= as.Date(start_date),
+    date_time_utc <= as.Date(end_date)
+  ) %>%
+    arrange(date_time_utc) %>% 
+    cast_filter(has_cast_count) %>%
+  collect()
+  names(y) <- toupper(names(y))
+  y
+}
 
 #/bottledata ----
 #* Get bottle data for specified ctd casts
