@@ -165,28 +165,53 @@ function() {
 #* Return small plankton and total plankton biomass for the specified cruise interval.
 #* @param cruiseymd_min:int min cruise identifier, must be one of cruise_ymd in cruises
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
+#* @param include_bottles:boolean include bottle data variables (temperature, salinity, chl-a, oxygen, nitrate, phosphate, silicate, potential density, dynamic height).
+#* @param relax_matching:boolean relax matching criteria between net and CTD casts from 2 to 5 km and 6 to 72 hours
 #* @serializer csv
 #* @get /zooplankton_biomass
 function(
   cruiseymd_max = 202301,
-  cruiseymd_min = 202001)
+  cruiseymd_min = 202001,
+  include_bottles=FALSE,
+  relax_matching=FALSE)
 {
-  fields <- c("cruise_ymd","netid", "towid", "netside", "shf", "volsampled", "propsorted", "smallplankton", "totalplankton")
-  y<-tbl(con, "net_uuids") %>%
+  fields <- c("ctdcruise","netid", "cast_count", "towid", "netside", "shf", "volsampled", "propsorted", "smallplankton", "totalplankton" )
+  matchtable <- ifelse(relax_matching, "uunet2ctd_alt", "uunet2ctd")
+  print(matchtable)
+  if(include_bottles){
+   fields <-union(fields, c('depth_m', 't_degc', 'salinity', 'o2ml_l', 'chlora', 'no3um', 'po4um', 'sio3um', "stheta", "r_dynht"))
+    y<-tbl(con, "net_uuids") %>%
     left_join(
-      tbl(con,'uunet2cruise',
+      tbl(con, matchtable,
           by="netid")
     ) |>
-    filter(
-      as.integer(cruise_ymd) >= cruiseymd_min,
-      as.integer(cruise_ymd) <= cruiseymd_max
-    ) |>
+    left_join(
+       tbl(con, 'ctd_bottles'),
+       by='cast_count') |>
+     filter(
+       as.integer(ctdcruise) >= cruiseymd_min,
+       as.integer(ctdcruise) <= cruiseymd_max
+     )
+ }else{
+   y<-tbl(con, "net_uuids") %>%
+     left_join(
+       tbl(con,matchtable,
+           by="netid")
+     ) |>
+     filter(
+       as.integer(ctdcruise) >= cruiseymd_min,
+       as.integer(ctdcruise) <= cruiseymd_max
+     )
+ }
+  y<- y |>
     select(all_of(fields)) |>
     collect()
   y <- y %>% mutate(sppervol=1000*smallplankton/volsampled, .after=smallplankton)
   y <- y %>% mutate(tppervol=1000*totalplankton/volsampled, .after=totalplankton)
   y[,'sppervol']=round(y[,'sppervol'],2)
   y[,'tppervol']=round(y[,'tppervol'],2)
+  y <- y |> arrange(ctdcruise,netid, cast_count)
+  colnames(y)[colnames(y)=='ctdcruise']='cruise YYYMM'
   colnames(y)[colnames(y)=='volsampled']='volume sampled (m^3)'
   colnames(y)[colnames(y)=='propsorted']='proportion sorted'
   colnames(y)[colnames(y)=='shf']='haul factor'
@@ -194,8 +219,18 @@ function(
   colnames(y)[colnames(y)=='sppervol']='SP/volume (ml/1000 m^3)'
   colnames(y)[colnames(y)=='totalplankton']='TP: total plankton (ml)'
   colnames(y)[colnames(y)=='tppervol']='TP/volume (ml/1000 m^3)'
-  
-  
+  if(include_bottles){
+    colnames(y)[colnames(y)=='depth_m']='bottle depth (m)'
+    colnames(y)[colnames(y)=='t_degc']='temperature (C)'
+    colnames(y)[colnames(y)=='o2ml_l']='O2 (ml/l)'
+    colnames(y)[colnames(y)=='chlora']='chl-a (ug/l)'
+    colnames(y)[colnames(y)=='no3um']='nitrate (um/l)'
+    colnames(y)[colnames(y)=='po4um']='phosphate (um/l)'
+    colnames(y)[colnames(y)=='sio3um']='silicate (um/l)'
+    colnames(y)[colnames(y)=='stheta']='potential density (kg/m3)'
+    colnames(y)[colnames(y)=='r_dynht']='dynamic height (m)'
+  }
+ 
   names(y) <- toupper(names(y))
   
    y
@@ -230,7 +265,10 @@ function() {
 #* @param ITISid:str comma-separated list of ITIS ids, or 'all'
 #* @param stage:str 'egg', 'larvae' or 'both'
 #* @param exact_match:boolean if false, return any species whose full taxonomy contains given ITIS id (if exact species is known, set to True; to search by higher taxa, set to False).
+#* @param include_bottles:boolean include bottle data variables (temperature, salinity, chl-a, oxygen, nitrate, phosphate, silicate, potential density, dynamic height) Selecting time interval >10 years may lead to very large downloads and slow response time.
+#* @param relax_matching:boolean relax matching criteria between net and CTD casts from 2 to 5 km and 6 to 72 hours
 #* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
+
 #* @serializer csv
 #* @get /itis_ichthyodata
 function(
@@ -238,6 +276,8 @@ function(
     cruiseymd_min = 202001,
     ITISid='all',
     stage='both',
+    include_bottles=FALSE,
+    relax_matching=FALSE,
     exact_match=TRUE,
     fields = c("cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "catch_per_effort")) #removing path for now
     {
@@ -246,6 +286,7 @@ function(
   
   # method 1: direct database connection
   catch <- FALSE
+  matchtable <- ifelse(relax_matching, "uunet2ctd_alt", "uunet2ctd")
   #Some fields appear in both egg and larvae table and need to be differentiated
   dupe_fields=intersect(fields,c("gebco_depth", "sppcode", "common_name", "itis_tsn"))
   larvae_dupes=paste(dupe_fields,"x", sep=".")
@@ -257,16 +298,34 @@ function(
     catch <- TRUE
   }
   
-  # First, get larvae data
-  Y2 <- tbl(con, "uunet2cruise") |>
-    left_join(
-      tbl(con, "uunet2ctd"), 
-      by="netid")
+  if (include_bottles){
+    fields <-union(fields, c('depth_m', 't_degc', 'salinity', 'o2ml_l', 'chlora', 'no3um', 'po4um', 'sio3um','stheta', 'r_dynht'))
+  }
   
-  Y1 <- tbl(con, "larvae_species_uuids") |>
-    full_join(
-      tbl(con,'egg_species_uuids'),
-      by <- join_by(netid, scientific_name))
+  if (include_bottles){
+    Y2 <- tbl(con, "uunet2cruise") |>
+      left_join(
+        tbl(con, matchtable), 
+        by="netid")|>
+      left_join(
+        tbl(con, 'ctd_bottles'),
+        by='cast_count')
+    
+    Y1 <- tbl(con, "larvae_species_uuids") |>
+      full_join(
+        tbl(con,'egg_species_uuids'),
+        by <- join_by(netid, scientific_name))
+  }else{
+    Y2 <- tbl(con, "uunet2cruise") |>
+      left_join(
+        tbl(con, matchtable), 
+        by="netid")
+    
+    Y1 <- tbl(con, "larvae_species_uuids") |>
+      full_join(
+        tbl(con,'egg_species_uuids'),
+        by <- join_by(netid, scientific_name))
+  }
 
    y0 <- left_join(
       Y2,Y1,
@@ -288,7 +347,7 @@ function(
     }
   }
   
-  y <- y0 %>% arrange(netid)
+  y <- y0 %>% arrange(netid, cast_count, ITISid)
   if(catch){
     y <- y %>% mutate(lcatch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
     y <- y %>% mutate(ecatch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
@@ -304,6 +363,18 @@ function(
     colnames(y)[colnames(y)=='itis_tsn.y']='egg ITIS ID'
     #colnames(y)[colnames[y]=="catch_per_effort"]=if_else(towtype=="MT", "catch per effort (catch/m^3)", "catch per effort (catch/10m^2)")
   }
+  if(include_bottles){
+    c('depth_m', 't_degc', 'salinity', 'o2ml_l', 'chlora', 'no3um', 'po4um', 'sio3um')
+    colnames(y)[colnames(y)=='depth_m']='bottle depth (m)'
+    colnames(y)[colnames(y)=='t_degc']='temperature (C)'
+    colnames(y)[colnames(y)=='o2ml_l']='O2 (ml/l)'
+    colnames(y)[colnames(y)=='chlora']='chl-a (ug/l)'
+    colnames(y)[colnames(y)=='no3um']='nitrate (um/l)'
+    colnames(y)[colnames(y)=='po4um']='phosphate (um/l)'
+    colnames(y)[colnames(y)=='sio3um']='silicate (um/l)'
+    colnames(y)[colnames(y)=='stheta']='potential density (kg/m3)'
+    colnames(y)[colnames(y)=='r_dynht']='dynamic height (m)'
+  }
   names(y) <- toupper(names(y))
   y
 }
@@ -316,7 +387,10 @@ function(
 #* @param cruiseymd_max:int max cruise identifier, must be one of cruise_ymd in cruises
 #* @param species:str comma-separated list of scientific names (case-sensitive), or 'all'
 #* @param stage:str 'egg', 'larvae' or 'both'
+#* @param include_bottles:boolean include bottle data variables (temperature, salinity, chl-a, oxygen, nitrate, phosphate,silicate, potential density, dynamic height) Selecting time interval >10 years may lead to very large downloads and slow response time.
+#* @param relax_matching:boolean relax matching criteria between net and CTD casts from 2 to 5 km and 6 to 72 hours
 #* @param fields:[str] fields to include in output, must be in list of values returned by /icthyo_variables
+
 #* @serializer csv
 #* @get /ichthyodata
 function(
@@ -324,6 +398,8 @@ function(
     cruiseymd_min = 202001,
     species='all',
     stage='both',
+    include_bottles=FALSE,
+    relax_matching=FALSE,
     fields = c( "cruise_ymd", "ship", "line", "station", "starttime", "latitude", "longitude", "orderocc", "starttime", "cast_count", "townumber", "towtype", "netside", "itis_tsn", "scientific_name", "catch_per_effort")) {
   
   # debug by setting a browser
@@ -331,6 +407,7 @@ function(
   
   # method 1: direct database connection
   catch <- FALSE
+  matchtable <- ifelse(relax_matching, "uunet2ctd_alt", "uunet2ctd")
   #Some fields appear in both egg and larvae table and need to be differentiated
   dupe_fields=intersect(fields,c("gebco_depth", "sppcode", "common_name", "itis_tsn"))
   larvae_dupes=paste(dupe_fields,"x", sep=".")
@@ -339,21 +416,36 @@ function(
     fields <- union(fields, c("netid", "larvaecount", "eggcount", "towtype", "volsampled", "shf", "propsorted")) |>
       setdiff("catch_per_effort") |> setdiff(dupe_fields) 
     fields <- c(fields,larvae_dupes,egg_dupes)
-    print(fields)
     catch <- TRUE
   }
+  if (include_bottles){
+    fields <-union(fields, c('depth_m', 't_degc', 'salinity', 'o2ml_l', 'chlora', 'no3um', 'po4um', 'sio3um','stheta','r_dynht'))
+  }
   
-  # First, get larvae data
-  Y2 <- tbl(con, "uunet2cruise") |>
-    left_join(
-      tbl(con, "uunet2ctd"), 
-      by="netid")
-  
-  Y1 <- tbl(con, "larvae_species_uuids") |>
-    full_join(
-      tbl(con,'egg_species_uuids'),
-      by <- join_by(netid, scientific_name))
-  
+  if (include_bottles){
+    Y2 <- tbl(con, "uunet2cruise") |>
+      left_join(
+        tbl(con, matchtable), 
+        by="netid") |>
+      left_join(
+        tbl(con, 'ctd_bottles'),
+        by='cast_count')
+    
+    Y1 <- tbl(con, "larvae_species_uuids") |>
+      full_join(
+        tbl(con,'egg_species_uuids'),
+        by <- join_by(netid, scientific_name)) 
+  }else{
+    Y2 <- tbl(con, "uunet2cruise") |>
+      left_join(
+        tbl(con, matchtable), 
+        by="netid") 
+    
+    Y1 <- tbl(con, "larvae_species_uuids") |>
+      full_join(
+        tbl(con,'egg_species_uuids'),
+        by <- join_by(netid, scientific_name)) 
+  }
   y0 <- left_join(
     Y2,Y1,
     by="netid") |>
@@ -369,7 +461,7 @@ function(
     y0 <- y0 %>% filter(scientific_name %in% sp_list)
   }
   
-  y <- y0 %>% arrange(netid)
+  y <- y0 %>% arrange(netid, cast_count, species)
   if(catch){
     y <- y %>% mutate(lcatch_per_effort=if_else(towtype=="MT", 100*larvaecount/volsampled, shf*larvaecount/propsorted), .before=larvaecount)
     y <- y %>% mutate(ecatch_per_effort=if_else(towtype=="MT", 100*eggcount/volsampled, shf*eggcount/propsorted), .before=eggcount)
@@ -383,7 +475,17 @@ function(
     colnames(y)[colnames(y)=='itis_tsn.x']='larvae ITIS ID'
     colnames(y)[colnames(y)=='itis_tsn.y']='egg ITIS ID'
   }
-  
+  if(include_bottles){
+    colnames(y)[colnames(y)=='depth_m']='bottle depth (m)'
+    colnames(y)[colnames(y)=='t_degc']='temperature (C)'
+    colnames(y)[colnames(y)=='o2ml_l']='O2 (ml/l)'
+    colnames(y)[colnames(y)=='chlora']='chl-a (ug/l)'
+    colnames(y)[colnames(y)=='no3um']='nitrate (um/l)'
+    colnames(y)[colnames(y)=='po4um']='phosphate (um/l)'
+    colnames(y)[colnames(y)=='sio3um']='silicate (um/l)'
+    colnames(y)[colnames(y)=='stheta']='potential density (kg/m3)'
+    colnames(y)[colnames(y)=='r_dynht']='dynamic height (m)'
+  }
   names(y) <- toupper(names(y))
   y
 }
